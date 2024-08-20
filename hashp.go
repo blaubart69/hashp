@@ -164,7 +164,7 @@ func main() {
 	var workers int
 	var bufsize int
 	defaultWorker := runtime.NumCPU()
-	flag.IntVar(&workers, "w", defaultWorker, "number of workers")
+	flag.IntVar(&workers, "w", defaultWorker, "number of workers (Number CPUs)")
 	flag.IntVar(&bufsize, "b", 4096, "buffersize read")
 	flag.Parse()
 
