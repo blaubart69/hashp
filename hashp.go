@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -101,7 +102,7 @@ func hasher(files <-chan ToHash, filedata <-chan []byte, hashes chan<- HashResul
 	}
 }
 
-func readFileSendToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- []byte, bufs *[2][4096]byte) {
+func readFileSendToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- []byte, bufs [][]byte) {
 	fp, err := os.Open(file.path)
 	if err != nil {
 		printErr("open file", err, file.path)
@@ -138,7 +139,7 @@ func readFileSendToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData cha
 	}
 }
 
-func readFiles(files <-chan ToHash, hashes chan<- HashResult, wg *sync.WaitGroup) {
+func readFiles(files <-chan ToHash, hashes chan<- HashResult, bufsize int, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
@@ -147,9 +148,12 @@ func readFiles(files <-chan ToHash, hashes chan<- HashResult, wg *sync.WaitGroup
 
 	go hasher(hasherFiles, hasherData, hashes)
 
-	var bufs [2][4096]byte
+	bufs := make([][]byte, 2)
+	bufs[0] = make([]byte, bufsize)
+	bufs[1] = make([]byte, bufsize)
+
 	for file := range files {
-		readFileSendToHasher(file, hasherFiles, hasherData, &bufs)
+		readFileSendToHasher(file, hasherFiles, hasherData, bufs)
 	}
 	close(hasherData)
 	close(hasherFiles)
@@ -158,7 +162,10 @@ func readFiles(files <-chan ToHash, hashes chan<- HashResult, wg *sync.WaitGroup
 func main() {
 
 	var workers int
-	flag.IntVar(&workers, "w", 32, "number of workers")
+	var bufsize int
+	defaultWorker := runtime.NumCPU()
+	flag.IntVar(&workers, "w", defaultWorker, "number of workers")
+	flag.IntVar(&bufsize, "b", 4096, "buffersize read")
 	flag.Parse()
 
 	if len(flag.Args()) != 1 {
@@ -186,7 +193,7 @@ func main() {
 	var wgReader sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wgReader.Add(1)
-		go readFiles(files, hashes, &wgReader)
+		go readFiles(files, hashes, bufsize, &wgReader)
 	}
 
 	go enumerate(dir2hash, files)
