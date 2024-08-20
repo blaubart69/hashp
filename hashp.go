@@ -80,7 +80,7 @@ func hashWriter(filename string, rootDir string, hashes <-chan HashResult, wg *s
 
 		for hash := range hashes {
 			relativeFilename := hash.filename[lenRootDir+1:]
-			fp.WriteString(fmt.Sprintf("%s %d %s\n", hex.EncodeToString(hash.hash), hash.filesize, relativeFilename))
+			fp.WriteString(fmt.Sprintf("%s %12d %s\n", hex.EncodeToString(hash.hash), hash.filesize, relativeFilename))
 		}
 	}
 }
