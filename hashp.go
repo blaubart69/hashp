@@ -37,7 +37,7 @@ func printStats(stats *Stats, statsLast *Stats, pauseSecs uint) {
 
 	bytesReadDiff := bytesRead - statsLast.bytesRead
 
-	fmt.Printf("files: %d\t%d MB\tread: %d MB/s\n",
+	fmt.Printf("files: %d\t%d MB\tread: %4d MB/s\n",
 		fileRead,
 		bytesRead/1024/1024,
 		bytesReadDiff/uint64(pauseSecs)/1024/1024)
