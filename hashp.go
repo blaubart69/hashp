@@ -21,8 +21,6 @@ type Stats struct {
 	bytesRead uint64
 }
 
-var stats = Stats{}
-
 type ToHash struct {
 	path string
 	size int64
@@ -32,10 +30,20 @@ func printErr(api string, err error, message string) {
 	fmt.Printf("E: %s, %s, %s\n", api, err.Error(), message)
 }
 
-func printStats(stats *Stats) {
-	fmt.Printf("files: %d\t%d MB\n",
-		atomic.LoadUint64(&stats.filesRead),
-		atomic.LoadUint64(&stats.bytesRead)/1024/1024)
+func printStats(stats *Stats, statsLast *Stats, pauseSecs uint) {
+
+	fileRead := atomic.LoadUint64(&stats.filesRead)
+	bytesRead := atomic.LoadUint64(&stats.bytesRead)
+
+	bytesReadDiff := bytesRead - statsLast.bytesRead
+
+	fmt.Printf("files: %d\t%d MB\tread: %d MB/s\n",
+		fileRead,
+		bytesRead/1024/1024,
+		bytesReadDiff/uint64(pauseSecs)/1024/1024)
+
+	statsLast.bytesRead = bytesRead
+	statsLast.filesRead = fileRead
 }
 
 func enumerate(directoryname string, files chan<- ToHash) {
@@ -102,7 +110,7 @@ func hasher(files <-chan ToHash, filedata <-chan []byte, hashes chan<- HashResul
 	}
 }
 
-func readFileSendToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- []byte, bufs [][]byte) {
+func readFileSendToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- []byte, bufs [][]byte, stats *Stats) {
 	fp, err := os.Open(file.path)
 	if err != nil {
 		printErr("open file", err, file.path)
@@ -139,7 +147,7 @@ func readFileSendToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData cha
 	}
 }
 
-func readFiles(files <-chan ToHash, hashes chan<- HashResult, bufsize int, wg *sync.WaitGroup) {
+func readFiles(files <-chan ToHash, hashes chan<- HashResult, bufsize int, stats *Stats, wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
@@ -153,7 +161,7 @@ func readFiles(files <-chan ToHash, hashes chan<- HashResult, bufsize int, wg *s
 	bufs[1] = make([]byte, bufsize)
 
 	for file := range files {
-		readFileSendToHasher(file, hasherFiles, hasherData, bufs)
+		readFileSendToHasher(file, hasherFiles, hasherData, bufs, stats)
 	}
 	close(hasherData)
 	close(hasherFiles)
@@ -181,6 +189,8 @@ func main() {
 	const MAX_ENUMERATE = 100
 
 	var wgWriter sync.WaitGroup
+	var stats = Stats{}
+	var statsLast = Stats{}
 
 	// channel to the writer of hashes
 	hashes := make(chan HashResult, 128)
@@ -193,7 +203,7 @@ func main() {
 	var wgReader sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wgReader.Add(1)
-		go readFiles(files, hashes, bufsize, &wgReader)
+		go readFiles(files, hashes, bufsize, &stats, &wgReader)
 	}
 
 	go enumerate(dir2hash, files)
@@ -209,14 +219,16 @@ func main() {
 		close(finished)
 	}()
 
+	var statsPauseSecs uint = 2
 loop:
+
 	for {
 		select {
 		case <-finished:
-			printStats(&stats)
+			printStats(&stats, &statsLast, statsPauseSecs)
 			break loop
-		case <-time.After(2 * time.Second):
-			printStats(&stats)
+		case <-time.After(time.Duration(statsPauseSecs) * time.Second):
+			printStats(&stats, &statsLast, statsPauseSecs)
 		}
 	}
 }
