@@ -20,6 +20,7 @@ import (
 type Stats struct {
 	filesRead uint64
 	bytesRead uint64
+	errors    uint64
 }
 
 type ToHash struct {
@@ -49,22 +50,23 @@ func printStats(stats *Stats, statsLast *Stats, pauseSecs uint) {
 
 	bytesReadDiff := bytesRead - statsLast.bytesRead
 
-	fmt.Printf("files: %d\t%d MB\tread: %4d MB/s\n",
+	fmt.Printf("files: %d\t%d MB\tread: %4d MB/s\terr: %d\n",
 		fileRead,
 		bytesRead/1024/1024,
-		bytesReadDiff/uint64(pauseSecs)/1024/1024)
+		bytesReadDiff/uint64(pauseSecs)/1024/1024,
+		atomic.LoadUint64(&stats.errors))
 
 	statsLast.bytesRead = bytesRead
 	statsLast.filesRead = fileRead
 }
 
-func enumerate(directoryname string, files chan<- ToHash) {
+func enumerate(directoryname string, files chan<- ToHash, errFunc func(error)) {
 
 	defer close(files)
 
 	walkErr := filepath.Walk(directoryname, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
-			fmt.Println(err)
+			errFunc(err)
 		}
 
 		if info.IsDir() {
@@ -77,7 +79,7 @@ func enumerate(directoryname string, files chan<- ToHash) {
 	})
 
 	if walkErr != nil {
-		printErr("filepath.Walk", walkErr)
+		panic(fmt.Sprintf("filepath.Walk, %s", walkErr))
 	}
 }
 
@@ -128,10 +130,10 @@ func hasher(files <-chan ToHash, filedata <-chan HashData, hashes chan<- HashRes
 	}
 }
 
-func sendFileToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- HashData, bufs [][]byte, stats *Stats) {
+func sendFileToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- HashData, bufs [][]byte, stats *Stats, errFunc func(error)) {
 	fp, err := os.Open(file.path)
 	if err != nil {
-		printErr("OPEN", err)
+		errFunc(err)
 	} else {
 		defer fp.Close()
 
@@ -144,7 +146,7 @@ func sendFileToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- 
 			numberRead, err := fp.Read(buf[:])
 			if err != nil && !errors.Is(err, io.EOF) {
 				hasherData <- HashData{-1, nil} // signal read error to hasher
-				printErr("READ", err)
+				errFunc(err)
 				break
 			} else {
 				atomic.AddUint64(&stats.bytesRead, uint64(numberRead))
@@ -159,7 +161,7 @@ func sendFileToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- 
 	}
 }
 
-func readFilesSendToHasher(files <-chan ToHash, hashes chan<- HashResult, bufsize int, stats *Stats, hasherRunning *int32) {
+func readFilesSendToHasher(files <-chan ToHash, hashes chan<- HashResult, bufsize int, stats *Stats, hasherRunning *int32, errFunc func(error)) {
 
 	hasherFiles := make(chan ToHash)
 	hasherData := make(chan HashData) // a channel with ONLY 1 item possible!!! due to "double buffering" with read
@@ -172,7 +174,7 @@ func readFilesSendToHasher(files <-chan ToHash, hashes chan<- HashResult, bufsiz
 	bufs[1] = make([]byte, bufsize)
 
 	for file := range files {
-		sendFileToHasher(file, hasherFiles, hasherData, bufs, stats)
+		sendFileToHasher(file, hasherFiles, hasherData, bufs, stats, errFunc)
 	}
 	close(hasherData)
 	close(hasherFiles)
@@ -187,6 +189,19 @@ func getRootDir(pathToHash string, pathToHashStat fs.FileInfo) string {
 			panic(err)
 		}
 		return rootDir
+	}
+}
+
+func createErrorFunc(filename string, errCounter *uint64) (*os.File, func(error)) {
+
+	fp, err := os.Create(filename)
+	if err != nil {
+		panic(fmt.Sprintf("could not create file for errors. %s", filename))
+	}
+
+	return fp, func(err error) {
+		atomic.AddUint64(errCounter, 1)
+		fmt.Fprintf(fp, "%s\n", err.Error())
 	}
 }
 
@@ -220,6 +235,9 @@ func main() {
 	var stats = Stats{}
 	var statsLast = Stats{}
 
+	errFp, errFunc := createErrorFunc("./errors.txt", &stats.errors)
+	defer errFp.Close()
+
 	// channel to the writer of hashes
 	hashes := make(chan HashResult, 128)
 
@@ -234,11 +252,11 @@ func main() {
 
 	var hasherRunning int32 = 0
 	for i := 0; i < workers; i++ {
-		go readFilesSendToHasher(files, hashes, bufsize, &stats, &hasherRunning)
+		go readFilesSendToHasher(files, hashes, bufsize, &stats, &hasherRunning, errFunc)
 	}
 
 	if pathToHashStat.IsDir() {
-		go enumerate(pathToHash, files)
+		go enumerate(pathToHash, files, errFunc)
 	} else {
 		files <- ToHash{path: pathToHash, size: pathToHashStat.Size()}
 		close(files)
