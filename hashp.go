@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -177,6 +178,18 @@ func readFilesSendToHasher(files <-chan ToHash, hashes chan<- HashResult, bufsiz
 	close(hasherFiles)
 }
 
+func getRootDir(pathToHash string, pathToHashStat fs.FileInfo) string {
+	if pathToHashStat.IsDir() {
+		return pathToHash
+	} else {
+		rootDir, err := filepath.Abs(path.Dir(pathToHash))
+		if err != nil {
+			panic(err)
+		}
+		return rootDir
+	}
+}
+
 func main() {
 
 	var workers int
@@ -191,9 +204,15 @@ func main() {
 		os.Exit(4)
 	}
 
-	dir2hash, err := filepath.Abs(flag.Arg(0))
+	pathToHash, err := filepath.Abs(flag.Arg(0))
 	if err != nil {
 		printErr("filepath.Abs", err)
+		os.Exit(8)
+	}
+
+	pathToHashStat, err := os.Stat(pathToHash)
+	if err != nil {
+		printErr("stat", err)
 		os.Exit(8)
 	}
 
@@ -202,9 +221,11 @@ func main() {
 
 	// channel to the writer of hashes
 	hashes := make(chan HashResult, 128)
+
+	rootDir := getRootDir(pathToHash, pathToHashStat)
 	var wgWriter sync.WaitGroup
 	wgWriter.Add(1)
-	go hashWriter("./hashes.txt", dir2hash, hashes, &wgWriter)
+	go hashWriter("./hashes.txt", rootDir, hashes, &wgWriter)
 
 	// channel from enumerate to read files
 	var MAX_ENUMERATE = defaultWorker * 8
@@ -214,8 +235,13 @@ func main() {
 	for i := 0; i < workers; i++ {
 		go readFilesSendToHasher(files, hashes, bufsize, &stats, &hasherRunning)
 	}
-
-	go enumerate(dir2hash, files)
+	if pathToHashStat.IsDir() {
+		go enumerate(pathToHash, files)
+	} else {
+		fmt.Printf("hashing file: %s\n", pathToHash)
+		files <- ToHash{path: pathToHash, size: pathToHashStat.Size()}
+		close(files)
+	}
 
 	finished := make(chan struct{})
 	go func() {
