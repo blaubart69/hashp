@@ -43,6 +43,19 @@ func printErr(api string, err error) {
 	fmt.Fprintf(os.Stderr, "%s\n", err.Error())
 }
 
+func ByteCountIEC(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %ciB",
+		float64(b)/float64(div), "KMGTPE"[exp])
+}
 func printStats(stats *Stats, statsLast *Stats, pauseSecs uint) {
 
 	fileRead := atomic.LoadUint64(&stats.filesRead)
@@ -50,9 +63,9 @@ func printStats(stats *Stats, statsLast *Stats, pauseSecs uint) {
 
 	bytesReadDiff := bytesRead - statsLast.bytesRead
 
-	fmt.Printf("files: %d\t%d MB\tread: %4d MB/s\terr: %d\n",
+	fmt.Printf("files: %12d %10s | read: %4d MB/s | err: %d\n",
 		fileRead,
-		bytesRead/1024/1024,
+		ByteCountIEC(bytesRead),
 		bytesReadDiff/uint64(pauseSecs)/1024/1024,
 		atomic.LoadUint64(&stats.errors))
 
