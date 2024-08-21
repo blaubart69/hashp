@@ -26,8 +26,19 @@ type ToHash struct {
 	size int64
 }
 
-func printErr(api string, err error, message string) {
-	fmt.Printf("E: %s, %s, %s\n", api, err.Error(), message)
+type HashData struct {
+	len int
+	buf []byte
+}
+
+type HashResult struct {
+	filename string
+	filesize int64
+	hash     []byte
+}
+
+func printErr(api string, err error) {
+	fmt.Fprintf(os.Stderr, "%s\n", err.Error())
 }
 
 func printStats(stats *Stats, statsLast *Stats, pauseSecs uint) {
@@ -65,14 +76,8 @@ func enumerate(directoryname string, files chan<- ToHash) {
 	})
 
 	if walkErr != nil {
-		printErr("filepath.Walk", walkErr, directoryname)
+		printErr("filepath.Walk", walkErr)
 	}
-}
-
-type HashResult struct {
-	filename string
-	filesize int64
-	hash     []byte
 }
 
 func hashWriter(filename string, rootDir string, hashes <-chan HashResult, wg *sync.WaitGroup) {
@@ -93,50 +98,56 @@ func hashWriter(filename string, rootDir string, hashes <-chan HashResult, wg *s
 	}
 }
 
-func hasher(files <-chan ToHash, filedata <-chan []byte, hashes chan<- HashResult) {
+func hasher(files <-chan ToHash, filedata <-chan HashData, hashes chan<- HashResult, hasherRunning *int32) {
+
+	defer func() {
+		if atomic.AddInt32(hasherRunning, -1) == 0 {
+			// I'm the last hasher.
+			// close the single channel of HashResults
+			close(hashes)
+		}
+	}()
 
 	h := sha256.New()
 
 	for file := range files {
+		h.Reset()
 		for data := range filedata {
-			if len(data) == 0 {
+			if data.len == -1 {
+				// error readinf the file
+				// don't send a result for this file
+				break
+			} else if data.len == 0 {
 				hashes <- HashResult{file.path, file.size, h.Sum(nil)}
-				h.Reset()
 				break
 			} else {
-				h.Write(data)
+				h.Write(data.buf)
 			}
 		}
 	}
 }
 
-func readFileSendToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- []byte, bufs [][]byte, stats *Stats) {
+func sendFileToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData chan<- HashData, bufs [][]byte, stats *Stats) {
 	fp, err := os.Open(file.path)
 	if err != nil {
-		printErr("open file", err, file.path)
+		printErr("OPEN", err)
 	} else {
 		defer fp.Close()
 
+		hasherFiles <- file
+
 		bufIdx := 0
-		sentFilenameToHasher := false
 		for {
 			bufIdx = 1 - bufIdx
 			buf := bufs[bufIdx]
 			numberRead, err := fp.Read(buf[:])
 			if err != nil && !errors.Is(err, io.EOF) {
-				printErr("read file", err, "")
+				hasherData <- HashData{-1, nil} // signal read error to hasher
+				printErr("READ", err)
 				break
 			} else {
-				if !sentFilenameToHasher {
-					// sent filename to hasher this late because of trouble with locked files
-					// giving an error
-					hasherFiles <- file
-					sentFilenameToHasher = true
-				}
-
 				atomic.AddUint64(&stats.bytesRead, uint64(numberRead))
-
-				hasherData <- buf[:numberRead]
+				hasherData <- HashData{numberRead, buf[:numberRead]}
 
 				if numberRead == 0 {
 					break
@@ -147,21 +158,20 @@ func readFileSendToHasher(file ToHash, hasherFiles chan<- ToHash, hasherData cha
 	}
 }
 
-func readFiles(files <-chan ToHash, hashes chan<- HashResult, bufsize int, stats *Stats, wg *sync.WaitGroup) {
-
-	defer wg.Done()
+func readFilesSendToHasher(files <-chan ToHash, hashes chan<- HashResult, bufsize int, stats *Stats, hasherRunning *int32) {
 
 	hasherFiles := make(chan ToHash)
-	hasherData := make(chan []byte) // a channel with ONLY 1 item possible!!! due to "double buffering" with read
+	hasherData := make(chan HashData) // a channel with ONLY 1 item possible!!! due to "double buffering" with read
 
-	go hasher(hasherFiles, hasherData, hashes)
+	atomic.AddInt32(hasherRunning, 1)
+	go hasher(hasherFiles, hasherData, hashes, hasherRunning)
 
 	bufs := make([][]byte, 2)
 	bufs[0] = make([]byte, bufsize)
 	bufs[1] = make([]byte, bufsize)
 
 	for file := range files {
-		readFileSendToHasher(file, hasherFiles, hasherData, bufs, stats)
+		sendFileToHasher(file, hasherFiles, hasherData, bufs, stats)
 	}
 	close(hasherData)
 	close(hasherFiles)
@@ -183,38 +193,32 @@ func main() {
 
 	dir2hash, err := filepath.Abs(flag.Arg(0))
 	if err != nil {
-		printErr("filepath.Abs", err, flag.Arg(0))
+		printErr("filepath.Abs", err)
+		os.Exit(8)
 	}
 
-	const MAX_ENUMERATE = 100
-
-	var wgWriter sync.WaitGroup
 	var stats = Stats{}
 	var statsLast = Stats{}
 
 	// channel to the writer of hashes
 	hashes := make(chan HashResult, 128)
+	var wgWriter sync.WaitGroup
 	wgWriter.Add(1)
 	go hashWriter("./hashes.txt", dir2hash, hashes, &wgWriter)
 
 	// channel from enumerate to read files
+	var MAX_ENUMERATE = defaultWorker * 8
 	files := make(chan ToHash, MAX_ENUMERATE)
 
-	var wgReader sync.WaitGroup
+	var hasherRunning int32 = 0
 	for i := 0; i < workers; i++ {
-		wgReader.Add(1)
-		go readFiles(files, hashes, bufsize, &stats, &wgReader)
+		go readFilesSendToHasher(files, hashes, bufsize, &stats, &hasherRunning)
 	}
 
 	go enumerate(dir2hash, files)
 
 	finished := make(chan struct{})
 	go func() {
-		// wait for all readers to finish
-		wgReader.Wait()
-		// signal END to HashWriter
-		close(hashes)
-
 		wgWriter.Wait()
 		close(finished)
 	}()
