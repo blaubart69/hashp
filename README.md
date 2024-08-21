@@ -1,2 +1,5 @@
-calculate SHA265 hashed of files in parallel.
-given a directory. or filename for a single file.
+calculate SHA265 hashes of files in a directory tree.
+
+#parallel
+#hashing
+
