@@ -58,19 +58,21 @@ func ByteCountIEC(b uint64) string {
 }
 func printStats(stats *Stats, statsLast *Stats, pauseSecs uint) {
 
-	fileRead := atomic.LoadUint64(&stats.filesRead)
+	filesRead := atomic.LoadUint64(&stats.filesRead)
 	bytesRead := atomic.LoadUint64(&stats.bytesRead)
 
 	bytesReadDiff := bytesRead - statsLast.bytesRead
+	filesReadDiff := filesRead - statsLast.filesRead
 
-	fmt.Printf("files: %12d %10s | read: %4d MB/s | err: %d\n",
-		fileRead,
+	fmt.Printf("files: %12d %10s | files/s: %6d %4d MB/s | err: %d\n",
+		filesRead,
 		ByteCountIEC(bytesRead),
+		filesReadDiff/uint64(pauseSecs),
 		bytesReadDiff/uint64(pauseSecs)/1024/1024,
 		atomic.LoadUint64(&stats.errors))
 
 	statsLast.bytesRead = bytesRead
-	statsLast.filesRead = fileRead
+	statsLast.filesRead = filesRead
 }
 
 func enumerate(directoryname string, files chan<- ToHash, errFunc func(error)) {
