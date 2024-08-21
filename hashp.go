@@ -200,7 +200,8 @@ func main() {
 	flag.Parse()
 
 	if len(flag.Args()) != 1 {
-		flag.Usage()
+		fmt.Fprintf(os.Stderr, "Usage of %s: [OPTS] {directory|file}\n", filepath.Base(os.Args[0]))
+		flag.PrintDefaults()
 		os.Exit(4)
 	}
 
@@ -235,10 +236,10 @@ func main() {
 	for i := 0; i < workers; i++ {
 		go readFilesSendToHasher(files, hashes, bufsize, &stats, &hasherRunning)
 	}
+
 	if pathToHashStat.IsDir() {
 		go enumerate(pathToHash, files)
 	} else {
-		fmt.Printf("hashing file: %s\n", pathToHash)
 		files <- ToHash{path: pathToHash, size: pathToHashStat.Size()}
 		close(files)
 	}
