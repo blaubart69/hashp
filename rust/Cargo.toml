@@ -1,0 +1,10 @@
+[package]
+name = "hashp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["macros","rt-multi-thread","fs"] }
+futures = { version = "0.3" }
+walkdir = "2"
+crossbeam = "0.8"
