@@ -28,13 +28,8 @@ fn enumerate(directory_to_hash : String, channel : crossbeam::channel::Sender<Fi
     }
 }
 
-//async fn hash_file(bufs : &mut [Vec<u8>; 2], fp : &mut tokio::fs::File, hasher : &mut sha2::Sha256) -> std::io::Result<()> {
 async fn hash_file(buf0 : &mut Vec<u8>, buf1 : &mut Vec<u8>, fp : &mut tokio::fs::File, hasher : &mut sha2::Sha256) -> std::io::Result<()> {
     
-    //let (b0, b1) = bufs.split_at_mut(1);
-    //let buf0 = &mut b0[0];
-    //let buf1 = &mut b1[0];
-
     let mut read_in_flight = fp.read(buf1.as_mut_slice() );
 
     loop {
