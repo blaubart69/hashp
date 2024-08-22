@@ -1,17 +1,13 @@
-use std::{io::Write, ops::{Deref, DerefMut}};
-
 use tokio::io::AsyncReadExt;
-
-use sha2::{Sha256, Digest};
-
+use sha2::{digest::generic_array::{arr, ArrayLength, GenericArray}, Digest, Sha256};
 
 struct FileToHash {
     len : u64,
     name : std::path::PathBuf
 }
 
-fn enumerate(channel : crossbeam::channel::Sender<FileToHash>) {
-    for dir_entry in walkdir::WalkDir::new(".") {
+fn enumerate(directory_to_hash : String, channel : crossbeam::channel::Sender<FileToHash>) {
+    for dir_entry in walkdir::WalkDir::new(directory_to_hash) {
         match dir_entry {
             Err(e) => eprintln!("{e}"),
             Ok(entry) => {
@@ -48,29 +44,30 @@ async fn hash_file(bufs : &mut [Vec<u8>; 2], fp : &mut tokio::fs::File, hasher :
         }
         else {
             read_in_flight = fp.read(buf1.as_mut_slice());
-            hasher.update(&buf0);
+            hasher.update(&buf0[0..number_read]);
         }
     }
 }
 
 async fn hash_files(channel : crossbeam::channel::Receiver<FileToHash>, bufsize : usize) {
 
-    let mut buf0: Vec<u8> = Vec::with_capacity(bufsize); buf0.resize(bufsize,0);
-    let mut buf1: Vec<u8> = Vec::with_capacity(bufsize); buf1.resize(bufsize,0);
+    let buf0 = vec![0u8; bufsize];
+    let buf1 = vec![0u8; bufsize];
     let mut bufs = [buf0, buf1];
 
     let mut hasher = sha2::Sha256::new();
-    
+    let mut hash_output = GenericArray::default();
+
     for file in channel {
 
-        match tokio::fs::File::options().read(true).open(file.name).await {
+        match tokio::fs::File::options().read(true).open(&file.name).await {
             Err(e) => eprintln!("OPEN {e}"),
             Ok(mut fp) => {
-                hasher.reset();
                 match hash_file(&mut bufs, &mut fp, &mut hasher).await {
                     Err(read_err) => eprintln!("READ {read_err}"),
                     Ok(()) => {
-                        let hash = hasher.finalize_reset();
+                        hasher.finalize_into_reset(&mut hash_output);
+                        println!("{hash_output:X}\t{}", file.name.display())
                     }
                 }
             }
@@ -80,6 +77,8 @@ async fn hash_files(channel : crossbeam::channel::Receiver<FileToHash>, bufsize 
 
 async fn main_hash(bufsize : usize) {
 
+    let directory_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
+
     let (enum_send_channel, enum_recv_channel) = crossbeam::channel::bounded(256);
 
     let mut set = tokio::task::JoinSet::new();
@@ -88,7 +87,7 @@ async fn main_hash(bufsize : usize) {
     }
 
     let enum_handle = std::thread::spawn(|| {
-        enumerate(enum_send_channel);
+        enumerate(directory_to_hash, enum_send_channel);
     });
 
     enum_handle.join().unwrap();
