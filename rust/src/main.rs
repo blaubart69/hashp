@@ -1,3 +1,9 @@
+use std::{io::Write, ops::{Deref, DerefMut}};
+
+use tokio::io::AsyncReadExt;
+
+use sha2::{Sha256, Digest};
+
 
 struct FileToHash {
     len : u64,
@@ -26,20 +32,59 @@ fn enumerate(channel : crossbeam::channel::Sender<FileToHash>) {
     }
 }
 
-async fn hash_files(channel : crossbeam::channel::Receiver<FileToHash>) {
-    for file in channel {
-        let name = file.name.display();
-        println!("hash: {name}");
+async fn hash_file(bufs : &mut [Vec<u8>; 2], fp : &mut tokio::fs::File, hasher : &mut sha2::Sha256) -> std::io::Result<()> {
+    
+    let (b0, b1) = bufs.split_at_mut(1);
+    let buf0 = &mut b0[0];
+    let buf1 = &mut b1[0];
+
+    let mut read_in_flight = fp.read(buf1.as_mut_slice() );
+
+    loop {
+        let number_read = read_in_flight.await?;
+        std::mem::swap(buf0, buf1);
+        if number_read == 0 {
+            return Ok(())
+        }
+        else {
+            read_in_flight = fp.read(buf1.as_mut_slice());
+            hasher.update(&buf0);
+        }
     }
 }
 
-async fn main_hash() {
+async fn hash_files(channel : crossbeam::channel::Receiver<FileToHash>, bufsize : usize) {
+
+    let mut buf0: Vec<u8> = Vec::with_capacity(bufsize); buf0.resize(bufsize,0);
+    let mut buf1: Vec<u8> = Vec::with_capacity(bufsize); buf1.resize(bufsize,0);
+    let mut bufs = [buf0, buf1];
+
+    let mut hasher = sha2::Sha256::new();
+    
+    for file in channel {
+
+        match tokio::fs::File::options().read(true).open(file.name).await {
+            Err(e) => eprintln!("OPEN {e}"),
+            Ok(mut fp) => {
+                hasher.reset();
+                match hash_file(&mut bufs, &mut fp, &mut hasher).await {
+                    Err(read_err) => eprintln!("READ {read_err}"),
+                    Ok(()) => {
+                        let hash = hasher.finalize_reset();
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn main_hash(bufsize : usize) {
 
     let (enum_send_channel, enum_recv_channel) = crossbeam::channel::bounded(256);
 
     let mut set = tokio::task::JoinSet::new();
     for i in 0..16 {
-        set.spawn(hash_files(enum_recv_channel.clone()));
+        set.spawn(hash_files(enum_recv_channel.clone(), bufsize ) );
     }
 
     let enum_handle = std::thread::spawn(|| {
@@ -58,5 +103,5 @@ fn main() {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(main_hash())
+        .block_on(main_hash(4096))
 }

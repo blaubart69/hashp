@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["macros","rt-multi-thread","fs"] }
+tokio = { version = "1", features = ["macros","rt-multi-thread","fs", "io-util"] }
 futures = { version = "0.3" }
 walkdir = "2"
 crossbeam = "0.8"
+sha2 = "0.10"
