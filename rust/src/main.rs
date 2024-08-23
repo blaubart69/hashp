@@ -1,6 +1,6 @@
 use std::{fmt::Write, io};
 
-use tokio::io::{AsyncReadExt};
+use tokio::io::AsyncReadExt;
 use sha2::{digest::generic_array::GenericArray, Digest};
 
 struct FileToHash {
