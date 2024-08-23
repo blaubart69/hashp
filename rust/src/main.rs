@@ -1,4 +1,4 @@
-use std::{io::Write, path::Path, sync::{Arc, Mutex}, time::Instant};
+use std::{io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::Instant};
 
 use tokio::io::{AsyncReadExt};
 use sha2::{Digest};
@@ -61,7 +61,9 @@ async fn hash_files(
 	files : crossbeam_channel::Receiver<FileToHash>, 
 	//hashes : Arc<Mutex<std::io::BufWriter<std::fs::File>>>,
     hashes : Arc<Mutex<impl Write>>,
-	bufsize : usize) {
+	bufsize : usize,
+    rootdir : Arc<PathBuf>
+) {
 
     let mut buf0 = vec![0u8; bufsize];
     let mut buf1 = vec![0u8; bufsize];
@@ -83,8 +85,7 @@ async fn hash_files(
                         use std::fmt::Write;
                         hash_line.clear();
 
-
-                        write!(&mut hash_line, "{hash_output:X}\t{}\t{}\n", file.len, file.name);
+                        write!(&mut hash_line, "{hash_output:X}\t{}\t{}\n", file.len, file.name.display());
                         //hashes.send(hash_line).await.expect("hash_files/hashes/send");
                         hashes.lock().unwrap().write(hash_line.as_bytes());
                     }
@@ -99,7 +100,7 @@ async fn main_hash(workers : usize) {
 
     let directoryname_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
 
-    let full_dir = Path::canonicalize(Path::new(&directoryname_to_hash)).unwrap();
+    let root_dir = Arc::new(Path::canonicalize(Path::new(&directoryname_to_hash)).unwrap());
 
     let hashes_filename = "./hashes.txt";
     let errors_filename = "./errors.txt";
@@ -114,10 +115,10 @@ async fn main_hash(workers : usize) {
 
     let start = Instant::now();
 
-    println!("starting {} hash workers for directory {}", workers, full_dir.to_str().unwrap());
+    println!("starting {} hash workers for directory {}", workers, root_dir.to_str().unwrap());
     let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..workers {
-        tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), bufsize ) );
+        tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), bufsize, root_dir.clone() ) );
     }
     let enum_thread = std::thread::spawn(|| enumerate(directoryname_to_hash, enum_send));
 
