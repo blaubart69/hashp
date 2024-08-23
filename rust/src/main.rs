@@ -1,33 +1,37 @@
-use std::{fmt::Write, io};
+use std::{io::Write, path::Path, sync::{Arc, Mutex}, time::Instant};
 
-use tokio::io::AsyncReadExt;
-use sha2::{digest::generic_array::GenericArray, Digest};
+use tokio::io::{AsyncReadExt};
+use sha2::{Digest};
 
 struct FileToHash {
     len : u64,
     name : std::path::PathBuf
 }
 
-fn send_io_error(api : &'static str, err : io::Error, channel : &crossbeam::channel::Sender<String>) {
+/*
+fn send_io_error(api : &'static str, err : io::Error, err_writer : &mut tokio::io::BufWriter<tokio::fs::File>) {
+    use std::fmt::Write;
 	let mut buf = String::new();
+    use std::fmt::Write;
 	write!(&mut buf, "{} {}", api, err.to_string());
-	channel.send(buf).expect("send_io_error");
+    err_writer.write(buf.as_bytes());
 }
+    */
 
-fn enumerate(directory_to_hash : String, channel : crossbeam::channel::Sender<FileToHash>, errors : crossbeam::channel::Sender<String>) {
+fn enumerate(directory_to_hash : String, channel : crossbeam_channel::Sender<FileToHash>) {
     for dir_entry in walkdir::WalkDir::new(directory_to_hash) {
         match dir_entry {
-            Err(e) => send_io_error("walkdir", e.into_io_error().expect("walkdir/into_io_error"), &errors),
+            Err(e) => eprintln!("{e}"),
             Ok(entry) => {
                 match entry.metadata() {
                     Err(e) => eprintln!("{e}"),
                     Ok(meta) => {
                         if meta.is_file() {
-                            channel.send( 
+                            let _ = channel.send( 
                                 FileToHash { 
                                     len: meta.len(), 
-                                    name: entry.path().to_owned() })
-                            .expect("channel/enum/send")
+                                    name: entry.into_path() })
+                            .expect("channel/enum/send");
                         }
                     }
                 }
@@ -54,9 +58,9 @@ async fn hash_file(buf0 : &mut Vec<u8>, buf1 : &mut Vec<u8>, fp : &mut tokio::fs
 }
 
 async fn hash_files(
-	files : crossbeam::channel::Receiver<FileToHash>, 
-	hashes : crossbeam::channel::Sender<String>,
-	errors : crossbeam::channel::Sender<String>,
+	files : crossbeam_channel::Receiver<FileToHash>, 
+	//hashes : Arc<Mutex<std::io::BufWriter<std::fs::File>>>,
+    hashes : Arc<Mutex<impl Write>>,
 	bufsize : usize) {
 
     let mut buf0 = vec![0u8; bufsize];
@@ -64,19 +68,25 @@ async fn hash_files(
     //let mut bufs = [buf0, buf1];
 
     let mut hasher = sha2::Sha256::new();
-    let mut hash_output = GenericArray::default();
+    let mut hash_output = sha2::digest::generic_array::GenericArray::default();
+    let mut hash_line = String::new();
 
     for file in files {
         match tokio::fs::File::options().read(true).open(&file.name).await {
-            Err(e) =>  send_io_error("open", e, &errors),
+            Err(e) =>  eprintln!("{e}"),
             Ok(mut fp) => {
                 match hash_file(&mut buf0, &mut buf1, &mut fp, &mut hasher).await {
-                    Err(read_err) => send_io_error("read", read_err, &errors),
+                    Err(read_err) => eprintln!("{read_err}"),
                     Ok(()) => {
                         hasher.finalize_into_reset(&mut hash_output);
-						let mut hash_line = String::new();
-						write!(&mut hash_line, "{hash_output:X}\t{}\t{}", file.len, file.name.display());
-						hashes.send(hash_line).expect("hash_files/hashes/send");
+                        
+                        use std::fmt::Write;
+                        hash_line.clear();
+
+
+                        write!(&mut hash_line, "{hash_output:X}\t{}\t{}\n", file.len, file.name);
+                        //hashes.send(hash_line).await.expect("hash_files/hashes/send");
+                        hashes.lock().unwrap().write(hash_line.as_bytes());
                     }
                 }
             }
@@ -84,44 +94,50 @@ async fn hash_files(
     }
 }
 
-async fn main_hash() {
 
-    let directory_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
-	let bufsize = 4096;
-	let workers = std::thread::available_parallelism().expect("available_parallelism").get();
+async fn main_hash(workers : usize) {
 
-    let (enum_send, enum_recv) = crossbeam::channel::bounded(256);
-	let (hash_send, hash_recv) = crossbeam::channel::bounded(4096);
-	let (err_send, err_recv) = crossbeam::channel::bounded(4096);
+    let directoryname_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
 
+    let full_dir = Path::canonicalize(Path::new(&directoryname_to_hash)).unwrap();
 
-    let mut hasher_tasks = tokio::task::JoinSet::new();
+    let hashes_filename = "./hashes.txt";
+    let errors_filename = "./errors.txt";
+	let bufsize = 64 * 1024;
+    let hash_writer = std::io::BufWriter::with_capacity(64*1024, std::fs::File::create(hashes_filename).expect("could not create hash result file"));
+    let err_writer = std::io::BufWriter::new(std::fs::File::create(errors_filename).expect("could not create file for errors"));
+    
+
+    let mux_hash_writer = Arc::new( Mutex::new(hash_writer));
+
+    let (enum_send, enum_recv) = crossbeam_channel::bounded(256);
+
+    let start = Instant::now();
+
+    println!("starting {} hash workers for directory {}", workers, full_dir.to_str().unwrap());
+    let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..workers {
-        hasher_tasks.spawn(hash_files(enum_recv.clone(), hash_send.clone(), err_send.clone(), bufsize ) );
+        tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), bufsize ) );
     }
-
-	let enum_erros = err_send.clone();
-    let enum_handle = std::thread::spawn(|| {
-        enumerate(directory_to_hash, enum_send, enum_erros);
-    });
+    let enum_thread = std::thread::spawn(|| enumerate(directoryname_to_hash, enum_send));
 
 	// wait for enumerate and hashers to finish
-    enum_handle.join().unwrap();
-    while let Some(item) = hasher_tasks.join_next().await {
+    enum_thread.join().unwrap();
+    while let Some(item) = tasks.join_next().await {
         let () = item.unwrap();
     }
-	drop(hash_send);
-	drop(err_send);
+    let duration = start.elapsed();
 
-
-
+    println!("done in {:?}",duration);
 }
 
+
 fn main() {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .unwrap()
-        .block_on(main_hash())
+        .unwrap();
+    
+    rt.block_on(main_hash(rt.metrics().num_workers()))
 }
