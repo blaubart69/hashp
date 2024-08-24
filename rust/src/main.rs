@@ -1,4 +1,4 @@
-use std::{io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::Instant};
+use std::{io::Write, path::{PathBuf}, sync::{Arc, Mutex}, time::Instant};
 
 use tokio::io::{AsyncReadExt};
 use sha2::{Digest};
@@ -8,38 +8,32 @@ struct FileToHash {
     name : std::path::PathBuf
 }
 
-fn enumerate_walk(directory_to_hash : String, channel : crossbeam_channel::Sender<FileToHash>) {
-    for dir_entry in walkdir::WalkDir::new(directory_to_hash) {
-        match dir_entry {
-            Err(e) => eprintln!("{e}"),
-            Ok(entry) => {
-                match entry.metadata() {
-                    Err(e) => eprintln!("{e}"),
-                    Ok(meta) => {
-                        if meta.is_file() {
-                            let _ = channel.send( 
-                                FileToHash { 
-                                    len: meta.len(), 
-                                    name: entry.into_path() })
-                            .expect("channel/enum/send");
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+fn enumerate(dir : &PathBuf, channel : &crossbeam_channel::Sender<FileToHash>) {
 
-fn enumerate(root_dir : String, channel : crossbeam_channel::Sender<FileToHash>) {
+	println!("enumerate: {}", dir.display());
 
-    match std::fs::read_dir(root_dir)  {
+    match std::fs::read_dir(&dir)  {
         Err(e) => eprintln!("READDIR(open) {e}"),
         Ok(dir_iterator) => {
             for dir_entry in dir_iterator {
                 match dir_entry {
                     Err(e) => eprintln!("READDIR(next) {e}"),
                     Ok(entry) => {
-                        println!("path: {}", entry.path().display());
+						match entry.metadata() {
+							Err(e) => eprint!("meta: {e}"),
+							Ok(meta) => {
+								if meta.is_dir() {
+									enumerate(&entry.path(), channel)
+								}
+								else {
+									let _ = channel.send( 
+										FileToHash { 
+											len: meta.len(), 
+											name: entry.path() })
+									.expect("channel/enum/send");
+								}
+							}
+						}
                     }
                 }
             }
@@ -70,7 +64,7 @@ async fn hash_files(
 	//hashes : Arc<Mutex<std::io::BufWriter<std::fs::File>>>,
     hashes : Arc<Mutex<impl Write>>,
 	bufsize : usize,
-    rootdir : Arc<PathBuf>
+    root_dir : Arc<PathBuf>
 ) {
 
     let mut buf0 = vec![0u8; bufsize];
@@ -93,9 +87,14 @@ async fn hash_files(
                         use std::fmt::Write;
                         hash_line.clear();
 
-                        write!(&mut hash_line, "{hash_output:X}\t{}\t{}\n", file.len, file.name.display());
-                        //hashes.send(hash_line).await.expect("hash_files/hashes/send");
-                        hashes.lock().unwrap().write(hash_line.as_bytes());
+						match file.name.strip_prefix(root_dir.as_path()) {
+							Err(e) => eprintln!("{e}"),
+							Ok(p) => {
+								write!(&mut hash_line, "{hash_output:X}\t{}\t{}\n", file.len, p.display());
+								//hashes.send(hash_line).await.expect("hash_files/hashes/send");
+								hashes.lock().unwrap().write(hash_line.as_bytes());
+							}
+						}
                     }
                 }
             }
@@ -103,13 +102,10 @@ async fn hash_files(
     }
 }
 
-
 async fn main_hash(workers : usize) {
 
-    let directoryname_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
-
-    let root_dir = Arc::new(Path::canonicalize(Path::new(&directoryname_to_hash)).unwrap());
-
+	let directoryname_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
+	
     let hashes_filename = "./hashes.txt";
     let errors_filename = "./errors.txt";
 	let bufsize = 64 * 1024;
@@ -123,12 +119,19 @@ async fn main_hash(workers : usize) {
 
     let start = Instant::now();
 
-    println!("starting {} hash workers for directory {}", workers, root_dir.display());
-    let mut tasks = tokio::task::JoinSet::new();
-    for _ in 0..workers {
-        tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), bufsize, root_dir.clone() ) );
-    }
-    let enum_thread = std::thread::spawn(|| enumerate(directoryname_to_hash, enum_send));
+	let root_dir = Arc::new(PathBuf::from(&directoryname_to_hash));
+	println!("starting {} hash workers for directory {}", workers, root_dir.display());
+	let mut tasks = tokio::task::JoinSet::new();
+	for _ in 0..workers {
+		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), bufsize, root_dir.clone() ) );
+	}
+
+	let enum_dir = PathBuf::from(directoryname_to_hash);
+    let enum_thread = std::thread::spawn(
+		move || {
+			
+			enumerate(&enum_dir, &enum_send);
+		});
 
 	// wait for enumerate and hashers to finish
     enum_thread.join().unwrap();
