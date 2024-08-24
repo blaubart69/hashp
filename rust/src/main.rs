@@ -115,7 +115,7 @@ async fn main_hash(workers : usize) {
 
     let start = Instant::now();
 
-    println!("starting {} hash workers for directory {}", workers, root_dir.to_str().unwrap());
+    println!("starting {} hash workers for directory {}", workers, root_dir.display());
     let mut tasks = tokio::task::JoinSet::new();
     for _ in 0..workers {
         tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), bufsize, root_dir.clone() ) );
