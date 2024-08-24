@@ -8,17 +8,7 @@ struct FileToHash {
     name : std::path::PathBuf
 }
 
-/*
-fn send_io_error(api : &'static str, err : io::Error, err_writer : &mut tokio::io::BufWriter<tokio::fs::File>) {
-    use std::fmt::Write;
-	let mut buf = String::new();
-    use std::fmt::Write;
-	write!(&mut buf, "{} {}", api, err.to_string());
-    err_writer.write(buf.as_bytes());
-}
-    */
-
-fn enumerate(directory_to_hash : String, channel : crossbeam_channel::Sender<FileToHash>) {
+fn enumerate_walk(directory_to_hash : String, channel : crossbeam_channel::Sender<FileToHash>) {
     for dir_entry in walkdir::WalkDir::new(directory_to_hash) {
         match dir_entry {
             Err(e) => eprintln!("{e}"),
@@ -39,6 +29,24 @@ fn enumerate(directory_to_hash : String, channel : crossbeam_channel::Sender<Fil
         }
     }
 }
+
+fn enumerate(root_dir : String, channel : crossbeam_channel::Sender<FileToHash>) {
+
+    match std::fs::read_dir(root_dir)  {
+        Err(e) => eprintln!("READDIR(open) {e}"),
+        Ok(dir_iterator) => {
+            for dir_entry in dir_iterator {
+                match dir_entry {
+                    Err(e) => eprintln!("READDIR(next) {e}"),
+                    Ok(entry) => {
+                        println!("path: {}", entry.path().display());
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 async fn hash_file(buf0 : &mut Vec<u8>, buf1 : &mut Vec<u8>, fp : &mut tokio::fs::File, hasher : &mut sha2::Sha256) -> std::io::Result<()> {
     
