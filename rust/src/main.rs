@@ -1,4 +1,4 @@
-use std::{io::Write, path::{PathBuf}, sync::{Arc, Mutex}, time::Instant};
+use std::{io::Write, ops::DerefMut, path::PathBuf, sync::{Arc, Mutex}, time::Instant};
 
 use tokio::io::{AsyncReadExt};
 use sha2::{Digest};
@@ -8,38 +8,56 @@ struct FileToHash {
     name : std::path::PathBuf
 }
 
-fn enumerate(dir : &PathBuf, channel : &crossbeam_channel::Sender<FileToHash>) {
+fn write_error(api : &str, err : std::io::Error, errors : &mut impl Write) {
+	errors.write_fmt(format_args!("{api} {err}\n")).expect("could not write to errors file");
+}
 
-	println!("enumerate: {}", dir.display());
+struct DirWalker<W: ?Sized + Write> {
+	channel : crossbeam_channel::Sender<FileToHash>,
+	error_writer : Arc<Mutex<W>>
+}
 
-    match std::fs::read_dir(&dir)  {
-        Err(e) => eprintln!("READDIR(open) {e}"),
-        Ok(dir_iterator) => {
-            for dir_entry in dir_iterator {
-                match dir_entry {
-                    Err(e) => eprintln!("READDIR(next) {e}"),
-                    Ok(entry) => {
-						match entry.metadata() {
-							Err(e) => eprint!("meta: {e}"),
-							Ok(meta) => {
-								if meta.is_dir() {
-									enumerate(&entry.path(), channel)
-								}
-								else {
-									let _ = channel.send( 
-										FileToHash { 
-											len: meta.len(), 
-											name: entry.path() })
-									.expect("channel/enum/send");
+impl<W: Write> DirWalker<W> {
+	pub fn new(channel : crossbeam_channel::Sender<FileToHash>, error_writer : Arc<Mutex<W>>) -> Self
+	{
+		DirWalker {
+			channel,
+			error_writer
+		}
+	}
+	pub fn enumerate(&mut self, dir : &PathBuf) {
+
+		match std::fs::read_dir(&dir)  {
+			Err(e) => write_error("readdir(open)", e, self.error_writer.lock().unwrap().deref_mut() ),
+			Ok(dir_iterator) => {
+				for dir_entry in dir_iterator {
+					match dir_entry {
+						Err(e) => write_error("readdir(next)", e, self.error_writer.lock().unwrap().deref_mut() ),
+						Ok(entry) => {
+							match entry.metadata() {
+								Err(e) => write_error("metadata", e, self.error_writer.lock().unwrap().deref_mut() ),
+								Ok(meta) => {
+									if meta.is_dir() {
+										self.enumerate(&entry.path())	//
+									}
+									else {
+										let _ = self.channel.send( 
+											FileToHash { 
+												len: meta.len(), 
+												name: entry.path() })
+										.expect("channel/enum/send");
+									}
 								}
 							}
 						}
-                    }
-                }
-            }
-        }
-    }
+					}
+				}
+			}
+		}
+	}
+	
 }
+
 
 
 async fn hash_file(buf0 : &mut Vec<u8>, buf1 : &mut Vec<u8>, fp : &mut tokio::fs::File, hasher : &mut sha2::Sha256) -> std::io::Result<()> {
@@ -63,6 +81,7 @@ async fn hash_files(
 	files : crossbeam_channel::Receiver<FileToHash>, 
 	//hashes : Arc<Mutex<std::io::BufWriter<std::fs::File>>>,
     hashes : Arc<Mutex<impl Write>>,
+	errors : Arc<Mutex<impl Write>>,
 	bufsize : usize,
     root_dir : Arc<PathBuf>
 ) {
@@ -73,26 +92,33 @@ async fn hash_files(
 
     let mut hasher = sha2::Sha256::new();
     let mut hash_output = sha2::digest::generic_array::GenericArray::default();
-    let mut hash_line = String::new();
+    let mut tmp_string_buf = String::new();
 
     for file in files {
+		use std::fmt::Write;
         match tokio::fs::File::options().read(true).open(&file.name).await {
-            Err(e) =>  eprintln!("{e}"),
+            Err(e) => {
+				write_error("open", e, errors.lock().unwrap().deref_mut() );
+			},
             Ok(mut fp) => {
                 match hash_file(&mut buf0, &mut buf1, &mut fp, &mut hasher).await {
-                    Err(read_err) => eprintln!("{read_err}"),
+                    Err(read_err) => {
+						write_error("read", read_err, errors.lock().unwrap().deref_mut() );
+					},
                     Ok(()) => {
                         hasher.finalize_into_reset(&mut hash_output);
                         
-                        use std::fmt::Write;
-                        hash_line.clear();
+                        
+                        tmp_string_buf.clear();
 
 						match file.name.strip_prefix(root_dir.as_path()) {
-							Err(e) => eprintln!("{e}"),
+							Err(e) => {
+								panic!("filename.strip_prefix {e}. this should not happen. root_dir: {}, filename: {}", root_dir.display(), file.name.display())
+							},
 							Ok(p) => {
-								write!(&mut hash_line, "{hash_output:X}\t{}\t{}\n", file.len, p.display());
+								write!(&mut tmp_string_buf, "{hash_output:X}\t{}\t{}\n", file.len, p.display()).expect("error writing hash line to tmp buffer");
 								//hashes.send(hash_line).await.expect("hash_files/hashes/send");
-								hashes.lock().unwrap().write(hash_line.as_bytes());
+								hashes.lock().unwrap().write(tmp_string_buf.as_bytes()).expect("error writing hash to file");
 							}
 						}
                     }
@@ -110,10 +136,11 @@ async fn main_hash(workers : usize) {
     let errors_filename = "./errors.txt";
 	let bufsize = 64 * 1024;
     let hash_writer = std::io::BufWriter::with_capacity(64*1024, std::fs::File::create(hashes_filename).expect("could not create hash result file"));
-    let err_writer = std::io::BufWriter::new(std::fs::File::create(errors_filename).expect("could not create file for errors"));
+    let error_writer = std::io::BufWriter::new(std::fs::File::create(errors_filename).expect("could not create file for errors"));
     
 
     let mux_hash_writer = Arc::new( Mutex::new(hash_writer));
+	let mux_error_writer = Arc::new( Mutex::new(error_writer));
 
     let (enum_send, enum_recv) = crossbeam_channel::bounded(256);
 
@@ -123,14 +150,14 @@ async fn main_hash(workers : usize) {
 	println!("starting {} hash workers for directory {}", workers, root_dir.display());
 	let mut tasks = tokio::task::JoinSet::new();
 	for _ in 0..workers {
-		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), bufsize, root_dir.clone() ) );
+		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), mux_error_writer.clone(), bufsize, root_dir.clone() ) );
 	}
 
 	let enum_dir = PathBuf::from(directoryname_to_hash);
     let enum_thread = std::thread::spawn(
 		move || {
-			
-			enumerate(&enum_dir, &enum_send);
+			let mut dir_walker = DirWalker::new(enum_send, mux_error_writer);
+			dir_walker.enumerate(&enum_dir);
 		});
 
 	// wait for enumerate and hashers to finish
