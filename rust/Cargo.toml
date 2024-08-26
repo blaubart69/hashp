@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["macros","rt-multi-thread","fs", "io-util"] }
+tokio = { version = "1", features = ["macros","rt-multi-thread","fs", "io-util", "time"] }
 futures = { version = "0.3" }
 crossbeam-channel = "0.5"
 sha2 = "0.10"

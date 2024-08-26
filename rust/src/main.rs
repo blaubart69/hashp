@@ -1,7 +1,23 @@
-use std::{io::Write, ops::DerefMut, path::PathBuf, sync::{Arc, Mutex}, time::Instant};
-
+use std::{io::Write, ops::DerefMut, path::PathBuf, sync::{atomic, Arc, Mutex}, time::{Duration, Instant}};
+use std::sync::atomic::AtomicU64;
 use tokio::io::{AsyncReadExt};
 use sha2::{Digest};
+
+struct Stats {
+	files_read : AtomicU64,
+	bytes_read : AtomicU64,
+	errors     : AtomicU64,
+}
+
+impl Stats {
+	pub fn new() -> Self {
+		Stats {
+			files_read : AtomicU64::new(0),
+			bytes_read : AtomicU64::new(0),
+			errors : AtomicU64::new(0)
+		}
+	}
+}
 
 struct FileToHash {
     len : u64,
@@ -14,28 +30,39 @@ fn write_error(api : &str, err : std::io::Error, errors : &mut impl Write) {
 
 struct DirWalker<W: ?Sized + Write> {
 	channel : crossbeam_channel::Sender<FileToHash>,
-	error_writer : Arc<Mutex<W>>
+	error_writer : Arc<Mutex<W>>,
+	stats : Arc<Stats>
 }
 
 impl<W: Write> DirWalker<W> {
-	pub fn new(channel : crossbeam_channel::Sender<FileToHash>, error_writer : Arc<Mutex<W>>) -> Self
+	pub fn new(channel : crossbeam_channel::Sender<FileToHash>, error_writer : Arc<Mutex<W>>, stats : Arc<Stats>) -> Self
 	{
 		DirWalker {
 			channel,
-			error_writer
+			error_writer,
+			stats
 		}
 	}
 	pub fn enumerate(&mut self, dir : &PathBuf) {
 
 		match std::fs::read_dir(&dir)  {
-			Err(e) => write_error("readdir(open)", e, self.error_writer.lock().unwrap().deref_mut() ),
+			Err(e) => {
+				self.stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
+				write_error("readdir(open)", e, self.error_writer.lock().unwrap().deref_mut() );
+			},
 			Ok(dir_iterator) => {
 				for dir_entry in dir_iterator {
 					match dir_entry {
-						Err(e) => write_error("readdir(next)", e, self.error_writer.lock().unwrap().deref_mut() ),
+						Err(e) => {
+							self.stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
+							write_error("readdir(next)", e, self.error_writer.lock().unwrap().deref_mut() );
+						},
 						Ok(entry) => {
 							match entry.metadata() {
-								Err(e) => write_error("metadata", e, self.error_writer.lock().unwrap().deref_mut() ),
+								Err(e) => {
+									self.stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
+									write_error("metadata", e, self.error_writer.lock().unwrap().deref_mut() );
+								},
 								Ok(meta) => {
 									if meta.is_dir() {
 										self.enumerate(&entry.path())	//
@@ -58,9 +85,7 @@ impl<W: Write> DirWalker<W> {
 	
 }
 
-
-
-async fn hash_file(buf0 : &mut Vec<u8>, buf1 : &mut Vec<u8>, fp : &mut tokio::fs::File, hasher : &mut sha2::Sha256) -> std::io::Result<()> {
+async fn hash_file(buf0 : &mut Vec<u8>, buf1 : &mut Vec<u8>, fp : &mut tokio::fs::File, hasher : &mut sha2::Sha256, bytes_read : &AtomicU64) -> std::io::Result<()> {
     
     let mut read_in_flight = fp.read(buf1.as_mut_slice() );
 
@@ -71,6 +96,7 @@ async fn hash_file(buf0 : &mut Vec<u8>, buf1 : &mut Vec<u8>, fp : &mut tokio::fs
             return Ok(())
         }
         else {
+			bytes_read.fetch_add(number_read.try_into().unwrap(), atomic::Ordering::Relaxed);
             read_in_flight = fp.read(buf1.as_mut_slice());
             hasher.update(&buf0[0..number_read]);
         }
@@ -83,7 +109,8 @@ async fn hash_files(
     hashes : Arc<Mutex<impl Write>>,
 	errors : Arc<Mutex<impl Write>>,
 	bufsize : usize,
-    root_dir : Arc<PathBuf>
+    root_dir : Arc<PathBuf>,
+	stats : Arc<Stats>
 ) {
 
     let mut buf0 = vec![0u8; bufsize];
@@ -99,15 +126,16 @@ async fn hash_files(
         match tokio::fs::File::options().read(true).open(&file.name).await {
             Err(e) => {
 				write_error("open", e, errors.lock().unwrap().deref_mut() );
+				stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
 			},
             Ok(mut fp) => {
-                match hash_file(&mut buf0, &mut buf1, &mut fp, &mut hasher).await {
+                match hash_file(&mut buf0, &mut buf1, &mut fp, &mut hasher, &stats.bytes_read).await {
                     Err(read_err) => {
 						write_error("read", read_err, errors.lock().unwrap().deref_mut() );
+						stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
 					},
                     Ok(()) => {
                         hasher.finalize_into_reset(&mut hash_output);
-                        
                         
                         tmp_string_buf.clear();
 
@@ -119,6 +147,7 @@ async fn hash_files(
 								write!(&mut tmp_string_buf, "{hash_output:X}\t{}\t{}\n", file.len, p.display()).expect("error writing hash line to tmp buffer");
 								//hashes.send(hash_line).await.expect("hash_files/hashes/send");
 								hashes.lock().unwrap().write(tmp_string_buf.as_bytes()).expect("error writing hash to file");
+								stats.files_read.fetch_add(1, atomic::Ordering::Relaxed);
 							}
 						}
                     }
@@ -126,6 +155,35 @@ async fn hash_files(
             }
         }
     }
+}
+
+fn load_get_diff_set_last(val : &AtomicU64, last : &mut u64) -> (u64, u64) {
+	let v = val.load(atomic::Ordering::Relaxed);
+	let diff = v - *last;
+	*last = v;
+	(v,diff)
+}
+
+async fn print_stats(stats : Arc<Stats>) {
+	let mut last_bytes : u64 = 0;
+	let mut last_files : u64 = 0;
+
+	let pause_secs = 2;
+
+	loop {
+		tokio::time::sleep( Duration::from_secs(pause_secs) ).await;
+
+		let (files, files_diff) = load_get_diff_set_last(&stats.files_read, &mut last_files);
+		let (bytes, bytes_diff) = load_get_diff_set_last(&stats.bytes_read, &mut last_bytes);
+
+		//println!("files: %12d %10s | files/s: %6d %4d MB/s | err: %d",
+		println!("files: {:>12} {:>12} | files/s: {:>6} {:>4} MB/s | err: {}",
+		files,
+		bytes, //ByteCountIEC(bytesRead),
+		files_diff/pause_secs,
+		bytes_diff/pause_secs/1024/1024,
+		stats.errors.load(atomic::Ordering::Relaxed));
+	}
 }
 
 async fn main_hash(workers : usize) {
@@ -144,19 +202,22 @@ async fn main_hash(workers : usize) {
 
     let (enum_send, enum_recv) = crossbeam_channel::bounded(256);
 
+	let stats = Arc::new(Stats::new());
+
     let start = Instant::now();
 
 	let root_dir = Arc::new(PathBuf::from(&directoryname_to_hash));
 	println!("starting {} hash workers for directory {}", workers, root_dir.display());
 	let mut tasks = tokio::task::JoinSet::new();
 	for _ in 0..workers {
-		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), mux_error_writer.clone(), bufsize, root_dir.clone() ) );
+		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), mux_error_writer.clone(), bufsize, root_dir.clone(), stats.clone() ) );
 	}
+	let stats_task =tokio::spawn( print_stats(stats.clone()));
 
 	let enum_dir = PathBuf::from(directoryname_to_hash);
     let enum_thread = std::thread::spawn(
 		move || {
-			let mut dir_walker = DirWalker::new(enum_send, mux_error_writer);
+			let mut dir_walker = DirWalker::new(enum_send, mux_error_writer, stats.clone());
 			dir_walker.enumerate(&enum_dir);
 		});
 
