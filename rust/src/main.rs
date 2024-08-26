@@ -1,4 +1,5 @@
-use std::{io::Write, ops::DerefMut, path::PathBuf, sync::{atomic, Arc, Mutex}, time::{Duration, Instant}};
+use core::fmt;
+use std::{fmt::Debug, io::Write, ops::DerefMut, path::PathBuf, sync::{atomic, Arc, Mutex}, time::{Duration, Instant}};
 use std::sync::atomic::AtomicU64;
 use tokio::io::{AsyncReadExt};
 use sha2::{Digest};
@@ -85,6 +86,48 @@ impl<W: Write> DirWalker<W> {
 	
 }
 
+struct ByteCount {
+	bytes : u64
+}
+
+impl std::fmt::Display for ByteCount {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		let unit = 1024;
+		if self.bytes < unit {
+			//return fmt.Sprintf("%d B", b)
+			write!(f, "{} B", self.bytes)
+		}
+		else {
+			let (mut div, mut exp) = (unit, 0);
+
+			let mut n = self.bytes / unit;
+			while n >= unit {
+				div *= unit;
+				exp += 1;
+				n /= unit
+			}
+
+			write!(f, "{:.2} {}iB", 
+				(self.bytes as f32) / (div as f32),
+				 "KMGTPE".chars().nth(exp).unwrap() )
+		}
+	}
+}
+/*
+fn byte_count_iec(b u64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %ciB",
+		float64(b)/float64(div), "KMGTPE"[exp])
+}*/
+
 async fn hash_file(buf0 : &mut Vec<u8>, buf1 : &mut Vec<u8>, fp : &mut tokio::fs::File, hasher : &mut sha2::Sha256, bytes_read : &AtomicU64) -> std::io::Result<()> {
     
     let mut read_in_flight = fp.read(buf1.as_mut_slice() );
@@ -165,6 +208,7 @@ fn load_get_diff_set_last(val : &AtomicU64, last : &mut u64) -> (u64, u64) {
 }
 
 async fn print_stats(stats : Arc<Stats>) {
+	let mut bytes_string = String::new();
 	let mut last_bytes : u64 = 0;
 	let mut last_files : u64 = 0;
 
@@ -175,14 +219,15 @@ async fn print_stats(stats : Arc<Stats>) {
 
 		let (files, files_diff) = load_get_diff_set_last(&stats.files_read, &mut last_files);
 		let (bytes, bytes_diff) = load_get_diff_set_last(&stats.bytes_read, &mut last_bytes);
-
-		//println!("files: %12d %10s | files/s: %6d %4d MB/s | err: %d",
+		bytes_string.clear();
+		use std::fmt::Write;
+		write!(&mut bytes_string, "{}", ByteCount { bytes }).unwrap();
 		println!("files: {:>12} {:>12} | files/s: {:>6} {:>4} MB/s | err: {}",
-		files,
-		bytes, //ByteCountIEC(bytesRead),
-		files_diff/pause_secs,
-		bytes_diff/pause_secs/1024/1024,
-		stats.errors.load(atomic::Ordering::Relaxed));
+			files,
+			bytes_string,
+			files_diff/pause_secs,
+			bytes_diff/pause_secs/1024/1024,
+			stats.errors.load(atomic::Ordering::Relaxed));
 	}
 }
 
