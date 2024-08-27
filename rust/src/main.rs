@@ -1,5 +1,4 @@
-use core::fmt;
-use std::{fmt::Debug, io::Write, ops::DerefMut, path::PathBuf, sync::{atomic, Arc, Mutex}, time::{Duration, Instant}};
+use std::{io::Write, ops::DerefMut, path::PathBuf, sync::{atomic, Arc, Mutex}, time::{Duration, Instant}};
 use std::sync::atomic::AtomicU64;
 use tokio::io::{AsyncReadExt};
 use sha2::{Digest};
@@ -241,7 +240,6 @@ async fn main_hash(workers : usize) {
     let hash_writer = std::io::BufWriter::with_capacity(64*1024, std::fs::File::create(hashes_filename).expect("could not create hash result file"));
     let error_writer = std::io::BufWriter::new(std::fs::File::create(errors_filename).expect("could not create file for errors"));
     
-
     let mux_hash_writer = Arc::new( Mutex::new(hash_writer));
 	let mux_error_writer = Arc::new( Mutex::new(error_writer));
 
@@ -257,7 +255,7 @@ async fn main_hash(workers : usize) {
 	for _ in 0..workers {
 		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), mux_error_writer.clone(), bufsize, root_dir.clone(), stats.clone() ) );
 	}
-	let stats_task =tokio::spawn( print_stats(stats.clone()));
+	let _stats_task =tokio::spawn( print_stats(stats.clone()));
 
 	let enum_dir = PathBuf::from(directoryname_to_hash);
     let enum_thread = std::thread::spawn(
