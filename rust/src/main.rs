@@ -3,6 +3,10 @@ use std::sync::atomic::AtomicU64;
 use tokio::io::{AsyncReadExt};
 use sha2::{Digest};
 
+use clap::Parser;
+
+
+
 struct Stats {
 	files_read : AtomicU64,
 	bytes_read : AtomicU64,
@@ -230,14 +234,14 @@ async fn print_stats(stats : Arc<Stats>) {
 	}
 }
 
-async fn main_hash(workers : usize) {
+async fn main_hash(workers : usize, directoryname_to_hash : String, bufsize_read_hash : usize) {
 
-	let directoryname_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
+	//let directoryname_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
 	
     let hashes_filename = "./hashes.txt";
     let errors_filename = "./errors.txt";
-	let bufsize = 64 * 1024;
-    let hash_writer = std::io::BufWriter::with_capacity(64*1024, std::fs::File::create(hashes_filename).expect("could not create hash result file"));
+	let bufsize_hashwriter = 64 * 1024;
+    let hash_writer = std::io::BufWriter::with_capacity(bufsize_hashwriter, std::fs::File::create(hashes_filename).expect("could not create hash result file"));
     let error_writer = std::io::BufWriter::new(std::fs::File::create(errors_filename).expect("could not create file for errors"));
     
     let mux_hash_writer = Arc::new( Mutex::new(hash_writer));
@@ -250,10 +254,10 @@ async fn main_hash(workers : usize) {
     let start = Instant::now();
 
 	let root_dir = Arc::new(PathBuf::from(&directoryname_to_hash));
-	println!("starting {} hash workers for directory {}", workers, root_dir.display());
+	println!("starting {} workers for directory {} with a read/hash buffer of {} bytes", workers, root_dir.display(), bufsize_read_hash);
 	let mut tasks = tokio::task::JoinSet::new();
 	for _ in 0..workers {
-		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), mux_error_writer.clone(), bufsize, root_dir.clone(), stats.clone() ) );
+		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), mux_error_writer.clone(), bufsize_read_hash, root_dir.clone(), stats.clone() ) );
 	}
 	let _stats_task =tokio::spawn( print_stats(stats.clone()));
 
@@ -274,13 +278,25 @@ async fn main_hash(workers : usize) {
     println!("done in {:?}",duration);
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None, after_help = "workers can be configured by setting the TOKIO_WORKER_THREADS environment variable")]
+struct Args {
+    #[arg(default_value=".")]
+    directory : String,
+    /// bufsize in kilobytes (read file)
+    /// 
+    #[arg(short, long, default_value="64")]
+    bufsize : usize
+}
 
 fn main() {
 
+    let args = Args::parse();
+    
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
     
-    rt.block_on(main_hash(rt.metrics().num_workers()))
+    rt.block_on(main_hash(rt.metrics().num_workers(), args.directory, args.bufsize * 1024))
 }
