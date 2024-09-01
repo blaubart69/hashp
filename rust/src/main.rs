@@ -1,11 +1,8 @@
 use std::{io::Write, ops::DerefMut, path::PathBuf, sync::{atomic, Arc, Mutex}, time::{Duration, Instant}};
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::Relaxed;
 use tokio::io::{AsyncReadExt};
 use sha2::{Digest};
-
-use clap::Parser;
-
-
 
 struct Stats {
 	files_read : AtomicU64,
@@ -190,7 +187,7 @@ async fn hash_files(
 								panic!("filename.strip_prefix {e}. this should not happen. root_dir: {}, filename: {}", root_dir.display(), file.name.display())
 							},
 							Ok(p) => {
-								write!(&mut tmp_string_buf, "{hash_output:X}\t{}\t{}\n", file.len, p.display()).expect("error writing hash line to tmp buffer");
+								write!(&mut tmp_string_buf, "{hash_output:x}\t{}\t{}\n", file.len, p.display()).expect("error writing hash line to tmp buffer");
 								//hashes.send(hash_line).await.expect("hash_files/hashes/send");
 								hashes.lock().unwrap().write(tmp_string_buf.as_bytes()).expect("error writing hash to file");
 								stats.files_read.fetch_add(1, atomic::Ordering::Relaxed);
@@ -234,9 +231,9 @@ async fn print_stats(stats : Arc<Stats>) {
 	}
 }
 
-async fn main_hash(workers : usize, directoryname_to_hash : String, bufsize_read_hash : usize) {
+async fn main_hash(workers : usize, directoryname_to_hash : PathBuf, bufsize_read_hash : usize) {
 
-	//let directoryname_to_hash = std::env::args().nth(1).unwrap_or_else(|| ".".to_string());
+	//let directoryname = Arc::new(directoryname_to_hash);
 	
     let hashes_filename = "./hashes.txt";
     let errors_filename = "./errors.txt";
@@ -253,21 +250,22 @@ async fn main_hash(workers : usize, directoryname_to_hash : String, bufsize_read
 
     let start = Instant::now();
 
-	let root_dir = Arc::new(PathBuf::from(&directoryname_to_hash));
+	let root_dir = Arc::new(directoryname_to_hash.clone());
 	println!("starting {} workers for directory {} with a read/hash buffer of {} bytes", workers, root_dir.display(), bufsize_read_hash);
 	let mut tasks = tokio::task::JoinSet::new();
 	for _ in 0..workers {
 		tasks.spawn(hash_files(enum_recv.clone(), mux_hash_writer.clone(), mux_error_writer.clone(), bufsize_read_hash, root_dir.clone(), stats.clone() ) );
 	}
+
 	let _stats_task =tokio::spawn( print_stats(stats.clone()));
 
-	let enum_dir = PathBuf::from(directoryname_to_hash);
-    let enum_thread = std::thread::spawn(
+	let enum_dir = root_dir.clone();
+	let enum_stats = stats.clone();
+	let enum_thread = std::thread::spawn(
 		move || {
-			let mut dir_walker = DirWalker::new(enum_send, mux_error_writer, stats.clone());
+			let mut dir_walker = DirWalker::new(enum_send, mux_error_writer, enum_stats);
 			dir_walker.enumerate(&enum_dir);
 		});
-
 	// wait for enumerate and hashers to finish
     enum_thread.join().unwrap();
     while let Some(item) = tasks.join_next().await {
@@ -275,24 +273,65 @@ async fn main_hash(workers : usize, directoryname_to_hash : String, bufsize_read
     }
     let duration = start.elapsed();
 
-    println!("done in {:?}",duration);
+    println!("files\t{}\ndata\t{}\nduration\t{:?}",
+			 stats.files_read.load(Relaxed),
+			 ByteCount { bytes: stats.bytes_read.load(Relaxed) },
+			 duration);
 }
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None, after_help = "workers can be configured by setting the TOKIO_WORKER_THREADS environment variable")]
-struct Args {
-    #[arg(default_value=".")]
-    directory : String,
+const HELP: &str = "\
+Usage: hashp.exe [OPTIONS] [DIRECTORY]
+
+Arguments:
+  [DIRECTORY]  [default: .]
+
+Options:
+  -b <BUFSIZE>  bufsize in kilobytes (read file) [default: 64]
+  -h            Print help
+
+workers can be configured by setting the TOKIO_WORKER_THREADS environment variable
+";
+
+#[derive(Debug)]
+struct AppArgs {
+    directory : std::path::PathBuf,
     /// bufsize in kilobytes (read file)
-    /// 
-    #[arg(short, long, default_value="64")]
     bufsize : usize
+}
+
+fn parse_args() -> Result<AppArgs, pico_args::Error> {
+	let mut pargs = pico_args::Arguments::from_env();
+
+	// Help has a higher priority and should be handled separately.
+	if pargs.contains(["-h", "--help"]) {
+		print!("{}", HELP);
+		std::process::exit(0);
+	}
+
+	let args = AppArgs {
+		bufsize: pargs.opt_value_from_str("-b")?.unwrap_or(64),
+		directory: pargs.opt_free_from_str()?.unwrap_or(".".into())
+	};
+
+	// It's up to the caller what to do with the remaining arguments.
+	let remaining = pargs.finish();
+	if !remaining.is_empty() {
+		eprintln!("Warning: unused arguments left: {:?}.", remaining);
+	}
+
+	Ok(args)
 }
 
 fn main() {
 
-    let args = Args::parse();
-    
+	let args = match parse_args() {
+		Ok(v) => v,
+		Err(e) => {
+			eprintln!("Error: {}.", e);
+			std::process::exit(1);
+		}
+	};
+
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
