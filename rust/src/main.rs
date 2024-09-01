@@ -1,4 +1,5 @@
 use std::{io::Write, ops::DerefMut, path::PathBuf, sync::{atomic, Arc, Mutex}, time::{Duration, Instant}};
+use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use tokio::io::{AsyncReadExt};
@@ -25,8 +26,15 @@ struct FileToHash {
     name : std::path::PathBuf
 }
 
-fn write_error(api : &str, err : std::io::Error, errors : &mut impl Write) {
-	errors.write_fmt(format_args!("{api} {err}\n")).expect("could not write to errors file");
+/*
+fn write_error(api : &str, err : std::io::Error, path : &Path, errors : &mut impl Write) {
+	errors.write_fmt(format_args!("{api} {err} {path}\n")).expect("could not write to errors file");
+}*/
+
+fn write_error2(api : &str, err : std::io::Error, path : &Path, errors : &Arc<Mutex<impl Write>>) {
+	errors.lock().unwrap().deref_mut()
+		.write_fmt(format_args!("{api} {err} {}\n", path.display()))
+		.expect("could not write to errors file");
 }
 
 struct DirWalker<W: ?Sized + Write> {
@@ -49,20 +57,20 @@ impl<W: Write> DirWalker<W> {
 		match std::fs::read_dir(&dir)  {
 			Err(e) => {
 				self.stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
-				write_error("readdir(open)", e, self.error_writer.lock().unwrap().deref_mut() );
+				write_error2("readdir(open)", e, dir.as_path(), &self.error_writer );
 			},
 			Ok(dir_iterator) => {
 				for dir_entry in dir_iterator {
 					match dir_entry {
 						Err(e) => {
 							self.stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
-							write_error("readdir(next)", e, self.error_writer.lock().unwrap().deref_mut() );
+							write_error2("readdir(next)", e, dir.as_path(), &self.error_writer );
 						},
 						Ok(entry) => {
 							match entry.metadata() {
 								Err(e) => {
 									self.stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
-									write_error("metadata", e, self.error_writer.lock().unwrap().deref_mut() );
+									write_error2("metadata", e, entry.path().as_path(), &self.error_writer );
 								},
 								Ok(meta) => {
 									if meta.is_dir() {
@@ -168,13 +176,13 @@ async fn hash_files(
 		use std::fmt::Write;
         match tokio::fs::File::options().read(true).open(&file.name).await {
             Err(e) => {
-				write_error("open", e, errors.lock().unwrap().deref_mut() );
+				write_error2("open", e, file.name.as_path(), &errors );
 				stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
 			},
             Ok(mut fp) => {
                 match hash_file(&mut buf0, &mut buf1, &mut fp, &mut hasher, &stats.bytes_read).await {
                     Err(read_err) => {
-						write_error("read", read_err, errors.lock().unwrap().deref_mut() );
+						write_error2("read", read_err, file.name.as_path(), &errors );
 						stats.errors.fetch_add(1, atomic::Ordering::Relaxed);
 					},
                     Ok(()) => {
