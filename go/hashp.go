@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -58,10 +57,6 @@ func (mw *MuxWriter) WriteString(s string) (int, error) {
 func (mw *MuxWriter) Close() {
 	mw.writer.Flush()
 	mw.fp.Close()
-}
-
-func printErr(err error) {
-	fmt.Fprintf(os.Stderr, "%s\n", err.Error())
 }
 
 func ByteCountIEC(b uint64) string {
@@ -124,7 +119,7 @@ func enumerate(directoryname string, files chan<- ToHash, errFunc func(error)) {
 	}
 }
 
-func readAndHashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *MuxWriter, errFunc func(error), wg *sync.WaitGroup) {
+func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *MuxWriter, errFunc func(error), wg *sync.WaitGroup) {
 	defer wg.Done()
 	hash := sha256.New()
 
@@ -148,18 +143,6 @@ func readAndHashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWri
 	}
 }
 
-func getRootDir(pathToHash string, pathToHashStat fs.FileInfo) string {
-	if pathToHashStat.IsDir() {
-		return pathToHash
-	} else {
-		rootDir, err := filepath.Abs(path.Dir(pathToHash))
-		if err != nil {
-			panic(err)
-		}
-		return rootDir
-	}
-}
-
 func createErrorFunc(writer *MuxWriter, errCounter *uint64) func(error) {
 	return func(err error) {
 		atomic.AddUint64(errCounter, 1)
@@ -173,7 +156,7 @@ func main() {
 	var bufsize int
 	defaultWorker := runtime.NumCPU()
 	flag.IntVar(&workers, "w", defaultWorker, "number of workers (number CPUs)")
-	flag.IntVar(&bufsize, "b", 64*1024, "buffersize")
+	flag.IntVar(&bufsize, "b", 128, "buffersize (kilobytes)")
 	flag.Parse()
 
 	if len(flag.Args()) != 1 {
@@ -182,42 +165,36 @@ func main() {
 		os.Exit(4)
 	}
 
-	pathToHash, err := filepath.Abs(flag.Arg(0))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	pathToHashStat, err := os.Stat(pathToHash)
+	pathToHashStat, err := os.Stat(flag.Arg(0))
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	var stats = Stats{}
-
-	rootDir := getRootDir(pathToHash, pathToHashStat)
-
 	// channel from enumerate to read files
 	var MAX_ENUMERATE = 1024
 	files := make(chan ToHash, MAX_ENUMERATE)
-
 	errWriter := NewMuxWriter("errors.txt", 64*1024)
-	hashWriter := NewMuxWriter("hashes.txt", 128*1024)
+	hashWriter := NewMuxWriter("hashes.txt", bufsize*1024)
 	defer errWriter.Close()
 	defer hashWriter.Close()
 
 	errFunc := createErrorFunc(errWriter, &stats.errors)
 
+	var lenRootDir int
+	if pathToHashStat.IsDir() {
+		lenRootDir = len(flag.Arg(0))
+		go enumerate(flag.Arg(0), files, errFunc)
+	} else {
+		lenRootDir = len(filepath.Dir(flag.Arg(0)))
+		files <- ToHash{path: flag.Arg(0), size: pathToHashStat.Size()}
+		close(files)
+	}
+
 	var wgHasher sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wgHasher.Add(1)
-		go readAndHashFiles(files, len(rootDir), &stats, hashWriter, errFunc, &wgHasher)
-	}
-
-	if pathToHashStat.IsDir() {
-		go enumerate(pathToHash, files, errFunc)
-	} else {
-		files <- ToHash{path: pathToHash, size: pathToHashStat.Size()}
-		close(files)
+		go hashFiles(files, lenRootDir, &stats, hashWriter, errFunc, &wgHasher)
 	}
 
 	go printStats(&stats, 2)
