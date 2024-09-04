@@ -153,10 +153,8 @@ func createErrorFunc(writer *MuxWriter, errCounter *uint64) func(error) {
 func main() {
 
 	var workers int
-	var bufsize int
 	defaultWorker := runtime.NumCPU()
 	flag.IntVar(&workers, "w", defaultWorker, "number of workers (number CPUs)")
-	flag.IntVar(&bufsize, "b", 128, "buffersize (kilobytes)")
 	flag.Parse()
 
 	if len(flag.Args()) != 1 {
@@ -170,14 +168,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var stats = Stats{}
-	// channel from enumerate to read files
-	var MAX_ENUMERATE = 1024
-	files := make(chan ToHash, MAX_ENUMERATE)
+	files := make(chan ToHash, 1024)
 	errWriter := NewMuxWriter("errors.txt", 64*1024)
-	hashWriter := NewMuxWriter("hashes.txt", bufsize*1024)
+	hashWriter := NewMuxWriter("hashes.txt", 128*1024)
 	defer errWriter.Close()
 	defer hashWriter.Close()
+
+	var stats = Stats{}
 
 	errFunc := createErrorFunc(errWriter, &stats.errors)
 
@@ -199,5 +196,17 @@ func main() {
 
 	go printStats(&stats, 2)
 
+	start := time.Now()
 	wgHasher.Wait()
+	errWriter.writer.Flush()
+	hashWriter.writer.Flush()
+
+	fmt.Printf(
+		"files      %d"+
+			"\ndata       %v"+
+			"\nduration   %s",
+		atomic.LoadUint64(&stats.filesRead),
+		ByteCountIEC(atomic.LoadUint64(&stats.bytesRead)),
+		time.Since(start))
+
 }
