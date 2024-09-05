@@ -162,8 +162,10 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(4)
 	}
-
-	cleanPath := filepath.Clean(flag.Arg(0))
+	cleanPath, err := filepath.Abs(flag.Arg(0))
+	if err != nil {
+		log.Fatal(err)
+	}
 	pathToHashStat, err := os.Stat(cleanPath)
 	if err != nil {
 		log.Fatal(err)
