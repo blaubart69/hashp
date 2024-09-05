@@ -136,7 +136,7 @@ func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *Mu
 			} else {
 				atomic.AddUint64(&stats.filesRead, 1)
 				atomic.AddUint64(&stats.bytesRead, uint64(written))
-				relativeFilename := file.path[lenRootDir+1:]
+				relativeFilename := file.path[lenRootDir:]
 				hashWriter.WriteString(fmt.Sprintf("%s %12d %s\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
 			}
 		}
@@ -163,7 +163,8 @@ func main() {
 		os.Exit(4)
 	}
 
-	pathToHashStat, err := os.Stat(flag.Arg(0))
+	cleanPath := filepath.Clean(flag.Arg(0))
+	pathToHashStat, err := os.Stat(cleanPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -180,14 +181,15 @@ func main() {
 
 	var lenRootDir int
 	if pathToHashStat.IsDir() {
-		lenRootDir = len(flag.Arg(0))
-		go enumerate(flag.Arg(0), files, errFunc)
+		lenRootDir = len(cleanPath)
+		go enumerate(cleanPath, files, errFunc)
 	} else {
-		lenRootDir = len(filepath.Dir(flag.Arg(0)))
-		files <- ToHash{path: flag.Arg(0), size: pathToHashStat.Size()}
+		lenRootDir = len(filepath.Dir(cleanPath))
+		fmt.Printf("FILE: dir: %s, len: %d\n", cleanPath, lenRootDir)
+		files <- ToHash{path: cleanPath, size: pathToHashStat.Size()}
 		close(files)
 	}
-
+	lenRootDir += len(string(filepath.Separator))
 	var wgHasher sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wgHasher.Add(1)
