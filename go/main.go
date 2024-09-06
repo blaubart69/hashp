@@ -124,7 +124,7 @@ func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *Mu
 	hash := sha256.New()
 
 	for file := range files {
-		fp, err := os.Open(file.path)
+		fp, err := openreadonly(file.path)
 		if err != nil {
 			errFunc(err)
 		} else {
