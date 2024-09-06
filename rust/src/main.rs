@@ -245,18 +245,18 @@ async fn main_hash(workers : usize, directoryname_to_hash : PathBuf, bufsize_rea
 	
     let hashes_filename = "./hashes.txt";
     let errors_filename = "./errors.txt";
-	let bufsize_hashwriter = 64 * 1024;
+	let bufsize_hashwriter = 128 * 1024;
     let hash_writer = std::io::BufWriter::with_capacity(bufsize_hashwriter, std::fs::File::create(hashes_filename).expect("could not create hash result file"));
     let error_writer = std::io::BufWriter::new(std::fs::File::create(errors_filename).expect("could not create file for errors"));
     
     let mux_hash_writer = Arc::new( Mutex::new(hash_writer));
 	let mux_error_writer = Arc::new( Mutex::new(error_writer));
 
-    let (enum_send, enum_recv) = crossbeam_channel::bounded(256);
+    let (enum_send, enum_recv) = crossbeam_channel::bounded(1024);
 
 	let stats = Arc::new(Stats::new());
 
-    let start = Instant::now();
+    
 
 	let root_dir = Arc::new(directoryname_to_hash.clone());
 	println!("starting {} workers for directory {} with a read/hash buffer of {} bytes", workers, root_dir.display(), bufsize_read_hash);
@@ -274,6 +274,8 @@ async fn main_hash(workers : usize, directoryname_to_hash : PathBuf, bufsize_rea
 			let mut dir_walker = DirWalker::new(enum_send, mux_error_writer, enum_stats);
 			dir_walker.enumerate(&enum_dir);
 		});
+
+	let start = Instant::now();
 	// wait for enumerate and hashers to finish
     enum_thread.join().unwrap();
     while let Some(item) = tasks.join_next().await {
