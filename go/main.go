@@ -137,7 +137,7 @@ func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *Mu
 				atomic.AddUint64(&stats.filesRead, 1)
 				atomic.AddUint64(&stats.bytesRead, uint64(written))
 				relativeFilename := file.path[lenRootDir:]
-				hashWriter.WriteString(fmt.Sprintf("%s %12d %s\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
+				hashWriter.WriteString(fmt.Sprintf("%s\t%12d\t%s\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
 			}
 		}
 	}
