@@ -1,5 +1,6 @@
 setlocal
 set GOOS=linux
 set GOARCH=amd64
-go build -o ./AMD64/linux
+mkdir .\AMD64\linux
+go build -o .\AMD64\linux
 endlocal
