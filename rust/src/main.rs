@@ -2,8 +2,8 @@ use std::{io::Write, ops::DerefMut, path::PathBuf, sync::{atomic, Arc, Mutex}, t
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
-use tokio::io::{AsyncReadExt};
-use sha2::{Digest};
+use tokio::io::AsyncReadExt;
+use sha2::Digest;
 
 struct Stats {
 	files_read : AtomicU64,
@@ -192,7 +192,7 @@ async fn hash_files(
 
 						match file.name.strip_prefix(root_dir.as_path()) {
 							Err(e) => {
-								panic!("filename.strip_prefix {e}. this should not happen. root_dir: {}, filename: {}", root_dir.display(), file.name.display())
+								panic!("filename.strip_prefix {}. this should not happen. root_dir: {}, filename: {}", e, root_dir.display(), file.name.display())
 							},
 							Ok(p) => {
 								write!(&mut tmp_string_buf, "{hash_output:x}\t{}\t{}\n", file.len, p.display()).expect("error writing hash line to tmp buffer");
