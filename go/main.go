@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -136,7 +137,7 @@ func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *Mu
 				atomic.AddUint64(&stats.filesRead, 1)
 				atomic.AddUint64(&stats.bytesRead, uint64(written))
 				relativeFilename := file.path[lenRootDir:]
-				hashWriter.WriteString(fmt.Sprintf("%s\t%12d\t%s\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
+				hashWriter.WriteString(fmt.Sprintf("%s\t%12d\t%s\r\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
 			}
 		}
 	}
@@ -183,6 +184,10 @@ func main() {
 	var lenRootDir int
 	if pathToHashStat.IsDir() {
 		lenRootDir = len(cleanPath)
+		if strings.HasSuffix(cleanPath, "\\") {
+			lenRootDir -= 1
+		}
+		fmt.Printf("directory to hash: %s\n", cleanPath)
 		go enumerate(cleanPath, files, errFunc)
 	} else {
 		lenRootDir = len(filepath.Dir(cleanPath))
