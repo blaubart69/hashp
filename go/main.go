@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -105,9 +106,7 @@ func enumerate(directoryname string, files chan<- ToHash, errFunc func(error)) {
 			errFunc(err)
 		}
 
-		if info.IsDir() {
-			// intentionally left blank
-		} else {
+		if info.Mode().IsRegular() {
 			files <- ToHash{path, info.Size()}
 		}
 
@@ -137,7 +136,7 @@ func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *Mu
 				atomic.AddUint64(&stats.filesRead, 1)
 				atomic.AddUint64(&stats.bytesRead, uint64(written))
 				relativeFilename := file.path[lenRootDir:]
-				hashWriter.WriteString(fmt.Sprintf("%s %12d %s\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
+				hashWriter.WriteString(fmt.Sprintf("%s\t%12d\t%s\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
 			}
 		}
 	}
@@ -200,6 +199,15 @@ func main() {
 
 	go printStats(&stats, 2)
 
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		<-c
+		errWriter.Close()
+		hashWriter.Close()
+		os.Exit(99)
+	}()
+
 	start := time.Now()
 	wgHasher.Wait()
 	errWriter.writer.Flush()
@@ -208,9 +216,11 @@ func main() {
 	fmt.Printf(
 		"files      %d"+
 			"\ndata       %v"+
-			"\nduration   %s",
+			"\nerrors      %d"+
+			"\nduration   %s\n",
 		atomic.LoadUint64(&stats.filesRead),
 		ByteCountIEC(atomic.LoadUint64(&stats.bytesRead)),
+		atomic.LoadUint64(&stats.errors),
 		time.Since(start))
 
 }
