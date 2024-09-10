@@ -256,8 +256,6 @@ async fn main_hash(workers : usize, directoryname_to_hash : PathBuf, bufsize_rea
 
 	let stats = Arc::new(Stats::new());
 
-    
-
 	let root_dir = Arc::new(directoryname_to_hash.clone());
 	println!("starting {} workers for directory {} with a read/hash buffer of {} bytes", workers, root_dir.display(), bufsize_read_hash);
 	let mut tasks = tokio::task::JoinSet::new();
