@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/hex"
 	"flag"
 	"fmt"
@@ -17,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/minio/sha256-simd"
 )
 
 type Stats struct {
