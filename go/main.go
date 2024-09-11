@@ -153,15 +153,23 @@ func createErrorFunc(writer *MuxWriter, errCounter *uint64) func(error) {
 func main() {
 
 	var workers int
+	var hashspeedTest bool
 	defaultWorker := runtime.NumCPU()
 	flag.IntVar(&workers, "w", defaultWorker, "number of workers (number CPUs)")
+	flag.BoolVar(&hashspeedTest, "t", false, "test the speed of hashing")
 	flag.Parse()
+
+	if hashspeedTest {
+		testHashSpeed(workers)
+		os.Exit(0)
+	}
 
 	if len(flag.Args()) != 1 {
 		fmt.Fprintf(os.Stderr, "Usage of %s: [OPTS] {directory|file}\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
 		os.Exit(4)
 	}
+
 	cleanPath, err := filepath.Abs(flag.Arg(0))
 	if err != nil {
 		log.Fatal(err)
@@ -228,4 +236,40 @@ func main() {
 		atomic.LoadUint64(&stats.errors),
 		time.Since(start))
 
+}
+
+func dummyHash(bytesHashed *uint64) {
+	hash := sha256.New()
+	data := make([]byte, 4096)
+
+	for i := range data {
+		data[i] = 42
+	}
+
+	for {
+		written, err := hash.Write(data)
+		if err != nil {
+			panic(err)
+		}
+		atomic.AddUint64(bytesHashed, uint64(written))
+	}
+}
+
+func testHashSpeed(workers int) {
+
+	var bytesHashed uint64 = 0
+
+	for i := 0; i < workers; i++ {
+		go dummyHash(&bytesHashed)
+	}
+	fmt.Printf("started %d hash workers\n", workers)
+
+	var last uint64 = 0
+	for {
+		time.Sleep(1 * time.Second)
+		curr := atomic.LoadUint64(&bytesHashed)
+		diff := curr - last
+		fmt.Printf("bytes/s\t%12s\t%12d\n", ByteCountIEC(diff), diff)
+		last = curr
+	}
 }

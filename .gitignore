@@ -3,3 +3,8 @@ rust/hashes.txt
 go/hashes.txt
 go/errors.txt
 go/hashp
+go/hashp.exe
+go/.vscode/launch.json
+rust/.idea/modules.xml
+rust/.idea/rust.iml
+rust/.idea/vcs.xml
