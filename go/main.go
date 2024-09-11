@@ -119,9 +119,20 @@ func enumerate(directoryname string, files chan<- ToHash, errFunc func(error)) {
 	}
 }
 
+type Progress struct {
+	bytesRead *uint64
+}
+
+func (p *Progress) Write(b []byte) (int, error) {
+	atomic.AddUint64(p.bytesRead, uint64(len(b)))
+	return len(b), nil
+}
+
 func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *MuxWriter, errFunc func(error), wg *sync.WaitGroup) {
 	defer wg.Done()
 	hash := sha256.New()
+
+	progress := Progress{bytesRead: &stats.bytesRead}
 
 	for file := range files {
 		fp, err := openreadonly(file.path)
@@ -129,13 +140,14 @@ func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *Mu
 			errFunc(err)
 		} else {
 			hash.Reset()
-			written, err := io.Copy(hash, fp)
+			teeReader := io.TeeReader(fp, &progress)
+			_, err := io.Copy(hash, teeReader)
 			fp.Close()
 			if err != nil {
 				errFunc(err)
 			} else {
 				atomic.AddUint64(&stats.filesRead, 1)
-				atomic.AddUint64(&stats.bytesRead, uint64(written))
+				//atomic.AddUint64(&stats.bytesRead, uint64(written))
 				relativeFilename := file.path[lenRootDir:]
 				hashWriter.WriteString(fmt.Sprintf("%s\t%12d\t%s\r\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
 			}
