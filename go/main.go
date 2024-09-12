@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	. "github.com/klauspost/cpuid/v2"
 	"github.com/minio/sha256-simd"
 )
 
@@ -275,6 +276,19 @@ func testHashSpeed(workers int) {
 	for i := 0; i < workers; i++ {
 		go dummyHash(&bytesHashed)
 	}
+	// Print basic CPU information:
+	fmt.Println("Name:", CPU.BrandName)
+	fmt.Println("Family", CPU.Family, "Model:", CPU.Model, "Vendor ID:", CPU.VendorID)
+	fmt.Println("PhysicalCores:        ", CPU.PhysicalCores)
+	fmt.Println("ThreadsPerCore:       ", CPU.ThreadsPerCore)
+	fmt.Println("LogicalCores:         ", CPU.LogicalCores)
+	fmt.Println("Cacheline bytes:      ", CPU.CacheLine)
+	fmt.Println("L1 Data Cache:        ", CPU.Cache.L1D, "bytes")
+	fmt.Println("L1 Instruction Cache: ", CPU.Cache.L1I, "bytes")
+	fmt.Println("L2 Cache:             ", CPU.Cache.L2, "bytes")
+	fmt.Println("L3 Cache:             ", CPU.Cache.L3, "bytes")
+	fmt.Println("Features: ", strings.Join(CPU.FeatureSet(), ","))
+
 	fmt.Printf("started %d hash workers\n", workers)
 
 	var last uint64 = 0
