@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	. "github.com/klauspost/cpuid/v2"
+	"github.com/klauspost/cpuid/v2"
 	"github.com/minio/sha256-simd"
 )
 
@@ -277,17 +277,17 @@ func testHashSpeed(workers int) {
 		go dummyHash(&bytesHashed)
 	}
 	// Print basic CPU information:
-	fmt.Println("Name:", CPU.BrandName)
-	fmt.Println("Family", CPU.Family, "Model:", CPU.Model, "Vendor ID:", CPU.VendorID)
-	fmt.Println("PhysicalCores:       ", CPU.PhysicalCores)
-	fmt.Println("ThreadsPerCore:      ", CPU.ThreadsPerCore)
-	fmt.Println("LogicalCores:        ", CPU.LogicalCores)
-	fmt.Println("Cacheline bytes:     ", CPU.CacheLine)
-	fmt.Printf("L1 Data Cache:        %12d bytes %12s\n", CPU.Cache.L1D, ByteCountIEC(uint64(CPU.Cache.L1D)))
-	fmt.Printf("L1 Instruction Cache: %12d bytes %12s\n", CPU.Cache.L1I, ByteCountIEC(uint64(CPU.Cache.L1I)))
-	fmt.Printf("L2 Cache:             %12d bytes %12s\n", CPU.Cache.L2, ByteCountIEC(uint64(CPU.Cache.L2)))
-	fmt.Printf("L3 Cache:             %12d bytes %12s\n", CPU.Cache.L3, ByteCountIEC(uint64(CPU.Cache.L3)))
-	fmt.Println("Features:", strings.Join(CPU.FeatureSet(), ","))
+	fmt.Println("Name:", cpuid.CPU.BrandName)
+	fmt.Println("Family", cpuid.CPU.Family, "Model:", cpuid.CPU.Model, "Vendor ID:", cpuid.CPU.VendorID)
+	fmt.Printf("PhysicalCores:        %12d\n", cpuid.CPU.PhysicalCores)
+	fmt.Printf("ThreadsPerCore:       %12d\n", cpuid.CPU.ThreadsPerCore)
+	fmt.Printf("LogicalCores:         %12d\n", cpuid.CPU.LogicalCores)
+	fmt.Printf("Cacheline bytes:      %12d\n", cpuid.CPU.CacheLine)
+	fmt.Printf("L1 Data Cache:        %12d bytes %12s\n", cpuid.CPU.Cache.L1D, ByteCountIEC(uint64(cpuid.CPU.Cache.L1D)))
+	fmt.Printf("L1 Instruction Cache: %12d bytes %12s\n", cpuid.CPU.Cache.L1I, ByteCountIEC(uint64(cpuid.CPU.Cache.L1I)))
+	fmt.Printf("L2 Cache:             %12d bytes %12s\n", cpuid.CPU.Cache.L2, ByteCountIEC(uint64(cpuid.CPU.Cache.L2)))
+	fmt.Printf("L3 Cache:             %12d bytes %12s\n", cpuid.CPU.Cache.L3, ByteCountIEC(uint64(cpuid.CPU.Cache.L3)))
+	fmt.Println("Features:", strings.Join(cpuid.CPU.FeatureSet(), ","))
 
 	fmt.Printf("started %d hash workers\n", workers)
 
