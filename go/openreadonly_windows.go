@@ -22,5 +22,9 @@ func openreadonly(path string) (*os.File, error) {
 		syscall.FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_SEQUENTIAL_SCAN,
 		0)
 
-	return os.NewFile(uintptr(handle), path), err
+	if err != nil {
+		return os.NewFile(uintptr(handle), path), &fs.PathError{Op: "CreateFile", Path: path, Err: err}
+	} else {
+		return os.NewFile(uintptr(handle), path), nil
+	}
 }
