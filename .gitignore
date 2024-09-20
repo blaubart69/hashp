@@ -3,3 +3,4 @@ go/*.txt
 go/*.exe
 rust/.idea
 .vscode
+win32_rust

@@ -63,19 +63,21 @@ func (mw *MuxWriter) Close() {
 	mw.fp.Close()
 }
 
-func ByteCountIEC(b uint64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
+/*
+	func ByteCountIEC(b uint64) string {
+		const unit = 1024
+		if b < unit {
+			return fmt.Sprintf("%d B", b)
+		}
+		div, exp := uint64(unit), 0
+		for n := b / unit; n >= unit; n /= unit {
+			div *= unit
+			exp++
+		}
+		return fmt.Sprintf("%.2f %ciB",
+			float64(b)/float64(div), "KMGTPE"[exp])
 	}
-	div, exp := uint64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.2f %ciB",
-		float64(b)/float64(div), "KMGTPE"[exp])
-}
+*/
 func printStats(stats *Stats, pauseSecs uint) {
 
 	statsLast := Stats{}
@@ -90,7 +92,7 @@ func printStats(stats *Stats, pauseSecs uint) {
 
 		fmt.Printf("files: %12d %10s | files/s: %6d %4d MB/s | err: %d\n",
 			filesRead,
-			ByteCountIEC(bytesRead),
+			MikeByteSize(bytesRead),
 			filesReadDiff/uint64(pauseSecs),
 			bytesReadDiff/uint64(pauseSecs)/1024/1024,
 			atomic.LoadUint64(&stats.errors))
@@ -241,12 +243,12 @@ func main() {
 	hashWriter.writer.Flush()
 
 	fmt.Printf(
-		"files      %d"+
+		"\nfiles      %d"+
 			"\ndata       %v"+
 			"\nerrors      %d"+
 			"\nduration   %s\n",
 		atomic.LoadUint64(&stats.filesRead),
-		ByteCountIEC(atomic.LoadUint64(&stats.bytesRead)),
+		MikeByteSize(atomic.LoadUint64(&stats.bytesRead)),
 		atomic.LoadUint64(&stats.errors),
 		time.Since(start))
 
@@ -283,10 +285,10 @@ func testHashSpeed(workers int) {
 	fmt.Printf("ThreadsPerCore:       %12d\n", cpuid.CPU.ThreadsPerCore)
 	fmt.Printf("LogicalCores:         %12d\n", cpuid.CPU.LogicalCores)
 	fmt.Printf("Cacheline bytes:      %12d\n", cpuid.CPU.CacheLine)
-	fmt.Printf("L1 Data Cache:        %12d bytes %12s\n", cpuid.CPU.Cache.L1D, ByteCountIEC(uint64(cpuid.CPU.Cache.L1D)))
-	fmt.Printf("L1 Instruction Cache: %12d bytes %12s\n", cpuid.CPU.Cache.L1I, ByteCountIEC(uint64(cpuid.CPU.Cache.L1I)))
-	fmt.Printf("L2 Cache:             %12d bytes %12s\n", cpuid.CPU.Cache.L2, ByteCountIEC(uint64(cpuid.CPU.Cache.L2)))
-	fmt.Printf("L3 Cache:             %12d bytes %12s\n", cpuid.CPU.Cache.L3, ByteCountIEC(uint64(cpuid.CPU.Cache.L3)))
+	fmt.Printf("L1 Data Cache:        %12d bytes %12s\n", cpuid.CPU.Cache.L1D, MikeByteSize(uint64(cpuid.CPU.Cache.L1D)))
+	fmt.Printf("L1 Instruction Cache: %12d bytes %12s\n", cpuid.CPU.Cache.L1I, MikeByteSize(uint64(cpuid.CPU.Cache.L1I)))
+	fmt.Printf("L2 Cache:             %12d bytes %12s\n", cpuid.CPU.Cache.L2, MikeByteSize(uint64(cpuid.CPU.Cache.L2)))
+	fmt.Printf("L3 Cache:             %12d bytes %12s\n", cpuid.CPU.Cache.L3, MikeByteSize(uint64(cpuid.CPU.Cache.L3)))
 	fmt.Println("Features:", strings.Join(cpuid.CPU.FeatureSet(), ","))
 
 	fmt.Printf("started %d hash workers\n", workers)
@@ -296,7 +298,7 @@ func testHashSpeed(workers int) {
 		time.Sleep(1 * time.Second)
 		curr := atomic.LoadUint64(&bytesHashed)
 		diff := curr - last
-		fmt.Printf("bytes/s\t%12s\t%12d\n", ByteCountIEC(diff), diff)
+		fmt.Printf("bytes/s\t%12s\t%12d\n", MikeByteSize(diff), diff)
 		last = curr
 	}
 }
