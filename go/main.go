@@ -48,7 +48,7 @@ func NewMuxWriter(filename string, bufsize int) *MuxWriter {
 	return &MuxWriter{
 		fp:     fp,
 		mux:    &sync.Mutex{},
-		writer: bufio.NewWriterSize(fp, 64*1024),
+		writer: bufio.NewWriterSize(fp, bufsize),
 	}
 }
 
@@ -196,7 +196,7 @@ func main() {
 	}
 
 	files := make(chan ToHash, 1024)
-	errWriter := NewMuxWriter("errors.txt", 64*1024)
+	errWriter := NewMuxWriter("errors.txt", 512)
 	hashWriter := NewMuxWriter("hashes.txt", 128*1024)
 	defer errWriter.Close()
 	defer hashWriter.Close()
@@ -239,8 +239,6 @@ func main() {
 
 	start := time.Now()
 	wgHasher.Wait()
-	errWriter.writer.Flush()
-	hashWriter.writer.Flush()
 
 	fmt.Printf(
 		"\nfiles      %d"+
@@ -251,7 +249,6 @@ func main() {
 		MikeByteSize(atomic.LoadUint64(&stats.bytesRead)),
 		atomic.LoadUint64(&stats.errors),
 		time.Since(start))
-
 }
 
 func dummyHash(bytesHashed *uint64) {
