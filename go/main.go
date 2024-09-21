@@ -34,21 +34,14 @@ type ToHash struct {
 
 type MuxWriter struct {
 	mux    *sync.Mutex
-	writer *bufio.Writer
-	fp     *os.File
+	writer io.StringWriter
 }
 
-func NewMuxWriter(filename string, bufsize int) *MuxWriter {
-
-	fp, err := os.Create(filename)
-	if err != nil {
-		log.Fatalln(err)
-	}
+func NewMuxWriter(writer io.StringWriter) *MuxWriter {
 
 	return &MuxWriter{
-		fp:     fp,
 		mux:    &sync.Mutex{},
-		writer: bufio.NewWriterSize(fp, bufsize),
+		writer: writer,
 	}
 }
 
@@ -58,26 +51,6 @@ func (mw *MuxWriter) WriteString(s string) (int, error) {
 	return mw.writer.WriteString(s)
 }
 
-func (mw *MuxWriter) Close() {
-	mw.writer.Flush()
-	mw.fp.Close()
-}
-
-/*
-	func ByteCountIEC(b uint64) string {
-		const unit = 1024
-		if b < unit {
-			return fmt.Sprintf("%d B", b)
-		}
-		div, exp := uint64(unit), 0
-		for n := b / unit; n >= unit; n /= unit {
-			div *= unit
-			exp++
-		}
-		return fmt.Sprintf("%.2f %ciB",
-			float64(b)/float64(div), "KMGTPE"[exp])
-	}
-*/
 func printStats(stats *Stats, pauseSecs uint) {
 
 	statsLast := Stats{}
@@ -132,7 +105,7 @@ func (p *Progress) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *MuxWriter, errFunc func(error), wg *sync.WaitGroup) {
+func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter io.StringWriter, errFunc func(error), wg *sync.WaitGroup) {
 	defer wg.Done()
 	hash := sha256.New()
 
@@ -151,7 +124,7 @@ func hashFiles(files <-chan ToHash, lenRootDir int, stats *Stats, hashWriter *Mu
 				errFunc(err)
 			} else {
 				atomic.AddUint64(&stats.filesRead, 1)
-				//atomic.AddUint64(&stats.bytesRead, uint64(written))
+				//atomic.AddUint64(&stats.bytesRead, uint64(written)) // now happens in the TeeReader
 				relativeFilename := file.path[lenRootDir:]
 				hashWriter.WriteString(fmt.Sprintf("%s\t%12d\t%s\r\n", hex.EncodeToString(hash.Sum(nil)), file.size, relativeFilename))
 			}
@@ -195,15 +168,28 @@ func main() {
 		log.Fatal(err)
 	}
 
-	files := make(chan ToHash, 1024)
-	errWriter := NewMuxWriter("errors.txt", 512)
-	hashWriter := NewMuxWriter("hashes.txt", 128*1024)
-	defer errWriter.Close()
-	defer hashWriter.Close()
+	fpErr, err := os.Create("errors.txt")
+	if err != nil {
+		panic(err)
+	}
+	defer fpErr.Close()
+	errWriter := NewMuxWriter(fpErr)
+
+	fpHashes, err := os.Create("hashes.txt")
+	if err != nil {
+		panic(err)
+	}
+	hashWriter := bufio.NewWriterSize(fpHashes, 128*1024)
+	defer func() {
+		hashWriter.Flush()
+		fpHashes.Close()
+	}()
 
 	var stats = Stats{}
 
 	errFunc := createErrorFunc(errWriter, &stats.errors)
+
+	files := make(chan ToHash, 1024)
 
 	var lenRootDir int
 	if pathToHashStat.IsDir() {
@@ -232,8 +218,9 @@ func main() {
 	signal.Notify(c, os.Interrupt)
 	go func() {
 		<-c
-		errWriter.Close()
-		hashWriter.Close()
+		fpErr.Close()
+		hashWriter.Flush()
+		fpHashes.Close()
 		os.Exit(99)
 	}()
 
