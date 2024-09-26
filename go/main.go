@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"runtime/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -147,18 +146,7 @@ func main() {
 	defaultWorker := runtime.NumCPU()
 	flag.IntVar(&workers, "w", defaultWorker, "number of workers (number CPUs)")
 	flag.BoolVar(&hashspeedTest, "t", false, "test the speed of hashing")
-	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
-	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
 	flag.Parse()
-
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
 
 	if hashspeedTest {
 		testHashSpeed(workers)
@@ -207,7 +195,7 @@ func main() {
 	var lenRootDir int
 	if pathToHashStat.IsDir() {
 		lenRootDir = len(cleanPath)
-		if strings.HasSuffix(cleanPath, "\\") {
+		if strings.HasSuffix(cleanPath, string(filepath.Separator)) {
 			lenRootDir -= 1
 		}
 		fmt.Printf("directory to hash: %s\n", cleanPath)
@@ -249,15 +237,6 @@ func main() {
 		MikeByteSize(atomic.LoadUint64(&stats.bytesRead)),
 		atomic.LoadUint64(&stats.errors),
 		time.Since(start))
-
-	if *memprofile != "" {
-		f, err := os.Create(*memprofile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		pprof.WriteHeapProfile(f)
-		f.Close()
-	}
 }
 
 func dummyHash(bytesHashed *uint64) {
