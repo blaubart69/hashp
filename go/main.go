@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -146,7 +147,18 @@ func main() {
 	defaultWorker := runtime.NumCPU()
 	flag.IntVar(&workers, "w", defaultWorker, "number of workers (number CPUs)")
 	flag.BoolVar(&hashspeedTest, "t", false, "test the speed of hashing")
+	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+	var memprofile = flag.String("memprofile", "", "write memory profile to this file")
 	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 
 	if hashspeedTest {
 		testHashSpeed(workers)
@@ -184,6 +196,7 @@ func main() {
 		hashWriter.Flush()
 		fpHashes.Close()
 	}()
+	hashMuxWriter := NewMuxWriter(hashWriter)
 
 	var stats = Stats{}
 
@@ -209,7 +222,7 @@ func main() {
 	var wgHasher sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wgHasher.Add(1)
-		go hashFiles(files, lenRootDir, &stats, hashWriter, errFunc, &wgHasher)
+		go hashFiles(files, lenRootDir, &stats, hashMuxWriter, errFunc, &wgHasher)
 	}
 
 	go printStats(&stats, 2)
@@ -236,6 +249,15 @@ func main() {
 		MikeByteSize(atomic.LoadUint64(&stats.bytesRead)),
 		atomic.LoadUint64(&stats.errors),
 		time.Since(start))
+
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		pprof.WriteHeapProfile(f)
+		f.Close()
+	}
 }
 
 func dummyHash(bytesHashed *uint64) {
