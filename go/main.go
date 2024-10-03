@@ -231,7 +231,7 @@ func main() {
 	fmt.Printf(
 		"\nfiles      %d"+
 			"\ndata       %v"+
-			"\nerrors      %d"+
+			"\nerrors     %d"+
 			"\nduration   %s\n",
 		atomic.LoadUint64(&stats.filesRead),
 		MikeByteSize(atomic.LoadUint64(&stats.bytesRead)),
