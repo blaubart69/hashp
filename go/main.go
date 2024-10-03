@@ -82,10 +82,10 @@ func enumerate(directoryname string, files chan<- ToHash, errFunc func(error)) {
 	walkErr := filepath.Walk(directoryname, func(path string, info fs.FileInfo, err error) error {
 		if err != nil {
 			errFunc(err)
-		}
-
-		if info.Mode().IsRegular() {
-			files <- ToHash{path, info.Size()}
+		} else {
+			if info.Mode().IsRegular() {
+				files <- ToHash{path, info.Size()}
+			}
 		}
 
 		return nil
